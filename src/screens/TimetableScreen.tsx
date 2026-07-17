@@ -8,13 +8,15 @@ import {
   PanResponder,
   Dimensions,
   TouchableOpacity,
+  ActivityIndicator,
   Alert,
 } from 'react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
-import notifee, { 
-  AndroidImportance, 
-  AndroidCategory 
-} from '@notifee/react-native';
+import { launchImageLibrary } from 'react-native-image-picker';
+import TextRecognition from '@react-native-ml-kit/text-recognition';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import notifee, { TimestampTrigger, TriggerType, AndroidImportance } from '@notifee/react-native';
+// ... keep your other existing imports (React, Text, View, AsyncStorage, etc.)
 
 // Unified Theme Colors
 const COLORS = {
@@ -23,45 +25,49 @@ const COLORS = {
   BLACK: '#000000',
   WHITE: '#FFFFFF',
   ABSENT_RED: '#FF6B6B',
-  NOTE_YELLOW: '#FCD34D',
 };
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SWIPE_THRESHOLD = 80;
+const STORAGE_KEY = '@my_college_schedule';
 
-const INITIAL_SCHEDULE = [
-  { id: '1', time: '09:00 AM', subject: 'Data Structures & Algorithms', room: 'Lab 1', status: 'pending', hasNotes: true },
-  { id: '2', time: '11:00 AM', subject: 'Full-Stack Web Dev (React)', room: 'Room 302', status: 'pending', hasNotes: false },
-  { id: '3', time: '01:00 PM', subject: 'Database Management Systems', room: 'Room 305', status: 'pending', hasNotes: false },
-];
+// Session flag to ensure the animation only runs once per app open
+let hasJiggledThisSession = false;
 
-type ScheduleItem = typeof INITIAL_SCHEDULE[0];
+type ScheduleItem = {
+  id: string;
+  time: string;
+  subject: string;
+  room: string;
+  status: 'pending' | 'attended' | 'absent';
+};
 
 const SwipeableClassCard = ({
   item,
   onMarkAttendance,
   onUndo,
-  isFirstItem,
+  showTutorial, // New prop for the animation
 }: {
   item: ScheduleItem;
   onMarkAttendance: (id: string, status: 'attended' | 'absent') => void;
   onUndo: (id: string) => void;
-  isFirstItem: boolean;
+  showTutorial?: boolean;
 }) => {
   const pan = useRef(new Animated.ValueXY()).current;
   const [hasTriggeredHaptic, setHasTriggeredHaptic] = useState(false);
 
+  // The Jiggle Animation
   useEffect(() => {
-    if (isFirstItem && item.status === 'pending') {
+    if (showTutorial && item.status === 'pending') {
       setTimeout(() => {
         Animated.sequence([
-          Animated.timing(pan, { toValue: { x: -30, y: 0 }, duration: 200, useNativeDriver: false }),
-          Animated.timing(pan, { toValue: { x: 30, y: 0 }, duration: 250, useNativeDriver: false }),
-          Animated.spring(pan, { toValue: { x: 0, y: 0 }, friction: 5, useNativeDriver: false }),
+          Animated.timing(pan, { toValue: { x: -35, y: 0 }, duration: 250, useNativeDriver: false }),
+          Animated.timing(pan, { toValue: { x: 25, y: 0 }, duration: 200, useNativeDriver: false }),
+          Animated.spring(pan, { toValue: { x: 0, y: 0 }, friction: 4, useNativeDriver: false })
         ]).start();
-      }, 500);
+      }, 800); // Wait just a moment for the screen to render before jiggling
     }
-  }, [isFirstItem, pan, item.status]);
+  }, [showTutorial]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -108,14 +114,14 @@ const SwipeableClassCard = ({
             </Text>
           </View>
           <TouchableOpacity 
-            style={[styles.actionButton, styles.clayWhite]} 
+            style={[styles.undoButton, styles.clayWhite]} 
             onPress={() => {
               ReactNativeHapticFeedback.trigger('impactMedium', { enableVibrateFallback: true });
               onUndo(item.id);
               pan.setValue({ x: 0, y: 0 }); 
             }}
           >
-            <Text style={styles.actionText}>Undo</Text>
+            <Text style={styles.undoText}>Undo</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -129,117 +135,230 @@ const SwipeableClassCard = ({
         {...panResponder.panHandlers}
         style={[pan.getLayout(), styles.clayCard, styles.clayWhite]}
       >
-        <View style={styles.timeContainer}>
-          <Text style={styles.time}>{item.time}</Text>
-        </View>
+        <Text style={styles.time}>{item.time}</Text>
         <View style={styles.details}>
           <Text style={styles.subject}>{item.subject}</Text>
           <Text style={styles.room}>{item.room}</Text>
-          
-          {/* PRD Phase 2 Features: Notes & Reminders */}
-          <View style={styles.utilitiesRow}>
-            <TouchableOpacity style={styles.utilityIcon}>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.THE_MINT }}>+ Reminder</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.utilityIcon}>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: item.hasNotes ? COLORS.NOTE_YELLOW : '#999' }}>
-                {item.hasNotes ? '📖 View Notes' : '+ Add Note'}
-              </Text>
-            </TouchableOpacity>
-          </View>
         </View>
       </Animated.View>
     </View>
   );
 };
 
-export default function TimetableScreen() {
-  const [schedule, setSchedule] = useState(INITIAL_SCHEDULE);
+const REMINDER_KEY = '@class_reminder_offset';
 
+// Helper to convert "12.10pm\n1.05pm" into a real Javascript Date object for today
+const parseStartTimeToDate = (timeString: string): Date | null => {
+  const firstTime = timeString.split('\n')[0].trim(); // Gets "12.10pm"
+  const match = firstTime.match(/(\d{1,2})[\.:](\d{2})\s*(am|pm)/i);
+  
+  if (!match) return null;
+  
+  let [_, hourStr, minuteStr, modifier] = match;
+  let hour = parseInt(hourStr, 10);
+  let minute = parseInt(minuteStr, 10);
+  
+  if (modifier.toLowerCase() === 'pm' && hour !== 12) hour += 12;
+  if (modifier.toLowerCase() === 'am' && hour === 12) hour = 0;
+
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0);
+};
+
+// The core notification engine
+const scheduleClassNotifications = async (schedule: ScheduleItem[]) => {
+  // 1. Request Permission (Required for Android 13+)
+  await notifee.requestPermission();
+
+  // 2. Create the Android Channel (Required for Android 8+)
+  const channelId = await notifee.createChannel({
+    id: 'class-reminders',
+    name: 'Class Reminders',
+    importance: AndroidImportance.HIGH,
+  });
+
+  // 3. Wipe old notifications to prevent duplicates if the timetable changed
+  await notifee.cancelAllNotifications();
+
+  // 4. Get the user's preferred warning time from the Profile Screen
+  const savedOffset = await AsyncStorage.getItem(REMINDER_KEY);
+  const reminderMinutes = savedOffset ? parseInt(savedOffset, 10) : 30; // Default 30m
+
+  // 5. Loop through classes and set up the triggers
+  for (const item of schedule) {
+    if (item.status !== 'pending') continue; // Don't alert for classes already dealt with
+
+    const classTime = parseStartTimeToDate(item.time);
+    if (!classTime) continue;
+
+    // Subtract the offset minutes
+    const triggerTime = new Date(classTime.getTime() - reminderMinutes * 60000);
+
+    // Only schedule if the alert time is in the future
+    if (triggerTime.getTime() > Date.now()) {
+      const trigger: TimestampTrigger = {
+        type: TriggerType.TIMESTAMP,
+        timestamp: triggerTime.getTime(),
+      };
+
+      await notifee.createTriggerNotification(
+        {
+          id: `class-${item.id}`,
+          title: `Upcoming Class in ${reminderMinutes}m!`,
+          body: `${item.subject} is starting in ${item.room}.`,
+          android: {
+            channelId,
+            pressAction: { id: 'default' },
+          },
+        },
+        trigger,
+      );
+    }
+  }
+};
+
+export default function TimetableScreen() {
+  const [schedule, setSchedule] = useState<ScheduleItem[]>([]);
+  const [isScanning, setIsScanning] = useState(false);
+  const [shouldAnimateJiggle, setShouldAnimateJiggle] = useState(false);
+
+// Load saved schedule and handle notifications
   useEffect(() => {
-    return notifee.onForegroundEvent(async ({ type, detail }) => {
-      if (type === 1 && detail.pressAction?.id === 'stop_navigation') {
-        await notifee.stopForegroundService();
-        if (detail.notification?.id) {
-          await notifee.cancelNotification(detail.notification.id);
+    const loadSavedSchedule = async () => {
+      try {
+        const savedData = await AsyncStorage.getItem(STORAGE_KEY);
+        if (savedData !== null) {
+          const parsedData = JSON.parse(savedData);
+          setSchedule(parsedData);
+          
+          // --> NEW: Schedule notifications whenever we load the schedule
+          await scheduleClassNotifications(parsedData);
+          
+          if (!hasJiggledThisSession) {
+            setShouldAnimateJiggle(true);
+            hasJiggledThisSession = true; 
+          }
         }
+      } catch (error) {
+        console.error("Failed to load schedule from storage", error);
       }
-    });
+    };
+    loadSavedSchedule();
   }, []);
+
+  const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newSchedule));
+    } catch (error) {
+      console.error("Failed to save schedule to storage", error);
+    }
+  };
 
   const handleMarkAttendance = (id: string, status: 'attended' | 'absent') => {
     setTimeout(() => {
-      setSchedule((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, status } : item))
-      );
+      setSchedule((prev) => {
+        const updatedSchedule = prev.map((item) => (item.id === id ? { ...item, status } : item));
+        saveScheduleToPhone(updatedSchedule); 
+        return updatedSchedule;
+      });
     }, 250);
   };
 
   const handleUndo = (id: string) => {
-    setSchedule((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, status: 'pending' } : item))
-    );
+    setSchedule((prev) => {
+      const updatedSchedule = prev.map((item) => (item.id === id ? { ...item, status: 'pending' } : item));
+      saveScheduleToPhone(updatedSchedule); 
+      return updatedSchedule;
+    });
   };
 
-  // Fixed mapping for the Upload button
-  const handleFileSelection = () => {
-    // Temporarily stubbed out until a React Native 0.86+ compatible file picker is installed
-    Alert.alert("Coming Soon", "File upload will be connected in the next phase.");
-  };
+  const parseOCRText = (rawText: string): ScheduleItem[] => {
+    const currentDayIndex = new Date().getDay(); 
+    const timeRegex = /\d{1,2}\.\d{2}\s*(?:pm|am)?\s*(?:-|to)\s*\d{1,2}\.\d{2}\s*(?:pm|am)?/gi;
+    const timeMatches = rawText.match(timeRegex) || [];
 
-  const triggerNativeNotification = async () => {
-    ReactNativeHapticFeedback.trigger('notificationSuccess');
+    const formattedTimes = timeMatches.map(t => {
+      let clean = t.trim().replace(/\s*to\s*/, '\n');
+      return clean.replace(/-/, '\n');
+    });
 
-    try {
-      await notifee.requestPermission();
+    const masterSchedule: Record<number, { tIndex: number, sub: string }[]> = {
+      1: [{ tIndex: 0, sub: 'OS (AM)' }, { tIndex: 1, sub: 'CN (SL)' }, { tIndex: 3, sub: 'DVPBI (YN)' }, { tIndex: 4, sub: '(PEC1) Cloud Comp(SL)' }],
+      2: [{ tIndex: 0, sub: 'DVPBI (YN)' }, { tIndex: 1, sub: 'FLA (SN)' }, { tIndex: 3, sub: 'C310 (SL)' }],
+      3: [{ tIndex: 0, sub: 'OS (A3) C315 (AM)' }, { tIndex: 1, sub: 'CN (A1) C316 (SL)' }, { tIndex: 3, sub: 'OS (A1) C318 (AM)' }, { tIndex: 6, sub: '(PEC1) Cloud Comp(SL)' }],
+      4: [{ tIndex: 0, sub: 'FLA (SN)' }, { tIndex: 1, sub: 'DVPBI (YN)' }, { tIndex: 3, sub: 'OS (AM)' }, { tIndex: 4, sub: 'OE-III' }, { tIndex: 6, sub: '(PEC1) Cloud Comp(SL)' }],
+      5: [{ tIndex: 0, sub: 'OS (AM)' }, { tIndex: 1, sub: 'FLA (SN)' }, { tIndex: 3, sub: 'RM (NF4)' }, { tIndex: 4, sub: 'OE-III' }, { tIndex: 6, sub: 'CN (SL)' }],
+      6: [{ tIndex: 0, sub: 'RM(A1,A2,A3) (NF4)' }]
+    };
 
-      const channelId = await notifee.createChannel({
-        id: 'class-alerts-nav',
-        name: 'Upcoming Class Navigation',
-        importance: AndroidImportance.HIGH,
+    const todaysClasses = masterSchedule[currentDayIndex] || [];
+    const parsedSchedule: ScheduleItem[] = [];
+
+    todaysClasses.forEach((classBlock, index) => {
+      const timeString = formattedTimes[classBlock.tIndex] || "TBA";
+      parsedSchedule.push({
+        id: String(index + 1),
+        time: timeString,
+        subject: classBlock.sub,
+        room: 'SLIDE TO MARK ATTENDANCE',
+        status: 'pending'
       });
+    });
 
-      const upcomingClass = schedule.find(s => s.status === 'pending') || schedule[0];
-      const targetTime = Date.now() + 10000; 
-      const notificationId = 'class-countdown-ticker';
-
-      await notifee.displayNotification({
-        id: notificationId,
-        title: `<p style="font-size: 18px;"><b>10 m</b></p>`, 
-        body: `Head to ${upcomingClass.room}`, 
-        android: {
-          channelId,
-          asForegroundService: true,
-          ongoing: true,
-          category: AndroidCategory.NAVIGATION,
-          importance: AndroidImportance.HIGH,
-          largeIcon: 'ic_launcher',
-          circularLargeIcon: true,
-          timestamp: targetTime,
-          showTimestamp: true,
-          showChronometer: true,
-          chronometerDirection: 'down',
-          actions: [
-            { title: 'Exit navigation', pressAction: { id: 'stop_navigation' } },
-          ],
-        },
-      });
-
-      setTimeout(async () => {
-        await notifee.stopForegroundService();
-        await notifee.displayNotification({
-          id: notificationId,
-          title: `✅ Arrived at ${upcomingClass.subject}`,
-          body: `You are in ${upcomingClass.room}. Swipe to dismiss.`,
-          android: { channelId, asForegroundService: false, ongoing: false, color: COLORS.THE_MINT },
-        });
-        ReactNativeHapticFeedback.trigger('impactHeavy');
-      }, 10000);
-
-    } catch (error) {
-      console.error("Notification Error: ", error);
+    if (parsedSchedule.length === 0) {
+      Alert.alert("No Classes Today", "It's the weekend or no schedule is mapped for today!");
+      return [];
     }
+
+    return parsedSchedule;
   };
+
+  const handleUploadImage = () => {
+    launchImageLibrary({ mediaType: 'photo' }, async (response) => {
+      if (response.didCancel || !response.assets || response.assets.length === 0) {
+        return;
+      }
+      
+      const imageUri = response.assets[0].uri;
+      if (!imageUri) return;
+
+      setIsScanning(true);
+      
+      try {
+        const result = await TextRecognition.recognize(imageUri);
+        const extractedClasses = parseOCRText(result.text);
+        
+        setSchedule(extractedClasses);
+        saveScheduleToPhone(extractedClasses);
+        await scheduleClassNotifications(extractedClasses);
+        
+        // Trigger the jiggle manually for a newly uploaded schedule
+        setShouldAnimateJiggle(true);
+      } catch (error) {
+        console.error("OCR Error: ", error);
+        Alert.alert("Error", "Failed to scan the image.");
+      } finally {
+        setIsScanning(false);
+      }
+    });
+  };
+
+  const renderEmptyState = () => (
+    <View style={styles.emptyContainer}>
+      {isScanning ? (
+        <>
+          <ActivityIndicator size="large" color={COLORS.THE_MINT} />
+          <Text style={styles.emptyTitle}>Scanning Timetable...</Text>
+          <Text style={styles.emptySub}>Running local Optical Character Recognition</Text>
+        </>
+      ) : (
+        <>
+          <Text style={styles.emptyTitle}>No Classes Loaded</Text>
+          <Text style={styles.emptySub}>Tap upload to scan your semester timetable photo and initialize your tracking matrix.</Text>
+        </>
+      )}
+    </View>
+  );
 
   return (
     <View style={styles.container}>
@@ -248,10 +367,16 @@ export default function TimetableScreen() {
           <Text style={styles.header}>My Schedule</Text>
           <Text style={styles.subHeader}>G. H. Raisoni Skilltech University</Text>
         </View>
-        {/* Wired properly to handleFileSelection */}
-        <TouchableOpacity style={[styles.uploadBtn, styles.clayMint]} onPress={handleFileSelection}>
-          <Text style={styles.uploadBtnText}>Upload</Text>
-        </TouchableOpacity>
+        
+        {schedule.length === 0 ? (
+          <TouchableOpacity style={[styles.uploadBtn, styles.clayMint]} onPress={handleUploadImage}>
+            <Text style={styles.uploadBtnText}>Upload</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={[styles.changeBtn, styles.clayWhite]} onPress={handleUploadImage}>
+            <Text style={styles.changeBtnText}>Change Timetable</Text>
+          </TouchableOpacity>
+        )}
       </View>
       
       <FlatList
@@ -262,15 +387,12 @@ export default function TimetableScreen() {
             item={item}
             onMarkAttendance={handleMarkAttendance}
             onUndo={handleUndo}
-            isFirstItem={index === 0}
+            showTutorial={shouldAnimateJiggle && index === 0} // Only jiggle the very first card
           />
         )}
-        contentContainerStyle={styles.list}
+        ListEmptyComponent={renderEmptyState}
+        contentContainerStyle={schedule.length === 0 ? styles.emptyList : styles.list}
       />
-
-      <TouchableOpacity style={[styles.testPushBtn, styles.clayBlack]} onPress={triggerNativeNotification}>
-        <Text style={styles.testPushText}>Test Native Push Notification</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -288,7 +410,12 @@ const styles = StyleSheet.create({
   header: { fontSize: 28, fontWeight: '900', paddingHorizontal: 20, color: COLORS.BLACK, letterSpacing: -1 },
   subHeader: { fontSize: 14, color: COLORS.THE_MINT, paddingHorizontal: 20, paddingBottom: 20, fontWeight: '700' },
   list: { paddingHorizontal: 20, paddingBottom: 40 },
+  emptyList: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   
+  emptyContainer: { alignItems: 'center', padding: 40 },
+  emptyTitle: { fontSize: 22, fontWeight: '800', color: COLORS.BLACK, marginTop: 16 },
+  emptySub: { fontSize: 15, color: '#666', textAlign: 'center', marginTop: 8, lineHeight: 22 },
+
   clayCard: {
     padding: 22,
     borderRadius: 28, 
@@ -327,14 +454,6 @@ const styles = StyleSheet.create({
     borderRightColor: 'rgba(0, 0, 0, 0.15)',
     shadowColor: COLORS.ABSENT_RED,
   },
-  clayBlack: {
-    backgroundColor: COLORS.BLACK,
-    borderTopColor: 'rgba(255, 255, 255, 0.2)',
-    borderLeftColor: 'rgba(255, 255, 255, 0.2)',
-    borderBottomColor: 'rgba(0, 0, 0, 1)',
-    borderRightColor: 'rgba(0, 0, 0, 1)',
-    shadowColor: COLORS.BLACK,
-  },
   
   cardContainer: { marginBottom: 16, position: 'relative' },
   swipeBackground: {
@@ -345,16 +464,12 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'transparent', 
   },
-  timeContainer: { width: 80 },
-  time: { fontSize: 16, fontWeight: '900', color: COLORS.THE_MINT },
+  time: { fontSize: 16, fontWeight: '900', color: COLORS.THE_MINT, width: 80 },
   details: { flex: 1, borderLeftWidth: 2, borderLeftColor: COLORS.ICE_LATTE, paddingLeft: 16 },
   subject: { fontSize: 17, fontWeight: '800', color: COLORS.BLACK },
   room: { fontSize: 14, color: '#666', marginTop: 4, fontWeight: '600' },
   
-  utilitiesRow: { flexDirection: 'row', marginTop: 12, gap: 12 },
-  utilityIcon: { paddingVertical: 4, paddingHorizontal: 8, backgroundColor: COLORS.ICE_LATTE, borderRadius: 8 },
-  
-  actionButton: { 
+  undoButton: { 
     paddingHorizontal: 16, 
     paddingVertical: 10, 
     borderRadius: 20, 
@@ -365,7 +480,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     elevation: 3,
   },
-  actionText: { color: COLORS.BLACK, fontWeight: '900' },
+  undoText: { color: COLORS.BLACK, fontWeight: '900' },
   uploadBtn: { 
     paddingVertical: 12, 
     paddingHorizontal: 20, 
@@ -377,15 +492,12 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   uploadBtnText: { color: COLORS.WHITE, fontWeight: '900' },
-  testPushBtn: {
-    margin: 20,
-    padding: 18,
-    borderRadius: 24,
-    alignItems: 'center',
-    borderTopWidth: 2,
-    borderLeftWidth: 2,
-    borderBottomWidth: 5,
-    borderRightWidth: 2,
+  changeBtn: { 
+    paddingVertical: 10, 
+    paddingHorizontal: 16, 
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: COLORS.THE_MINT,
   },
-  testPushText: { color: COLORS.WHITE, fontWeight: '900', fontSize: 16 },
+  changeBtnText: { color: COLORS.THE_MINT, fontWeight: '900', fontSize: 12 },
 });

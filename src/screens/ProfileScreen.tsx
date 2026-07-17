@@ -1,43 +1,89 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
-import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const COLORS = {
+  ICE_LATTE: '#E4DDD3',
+  THE_MINT: '#00A19B',
+  BLACK: '#000000',
+  WHITE: '#FFFFFF',
+};
+
+const REMINDER_KEY = '@class_reminder_offset';
+const REMINDER_OPTIONS = [10, 20, 30, 60];
 
 export default function ProfileScreen({ navigation }: any) {
-  // Mock data for UI development
-  const student = {
-    name: 'Abhigyan R. Varma',
-    regNo: '2024CS1001',
-    course: 'B.Tech CSE',
-    campus: 'GHRSTU'
+  const [reminderOffset, setReminderOffset] = useState<number>(30); // Default to 30
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      const savedOffset = await AsyncStorage.getItem(REMINDER_KEY);
+      if (savedOffset) {
+        setReminderOffset(parseInt(savedOffset, 10));
+      }
+    };
+    loadSettings();
+  }, []);
+
+  const handleReminderChange = async (minutes: number) => {
+    setReminderOffset(minutes);
+    await AsyncStorage.setItem(REMINDER_KEY, String(minutes));
+    // Note: The Timetable screen will automatically apply this new offset 
+    // the next time it calculates the schedule!
   };
 
   const handleLogout = () => {
-    ReactNativeHapticFeedback.trigger("notificationWarning");
     navigation.replace('Login');
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.card}>
+      <View style={styles.headerContainer}>
         <View style={styles.avatarPlaceholder}>
-          <Text style={styles.avatarText}>{student.name.charAt(0)}</Text>
+          <Text style={styles.avatarText}>AV</Text>
         </View>
-        <Text style={styles.name}>{student.name}</Text>
-        <Text style={styles.subText}>{student.course}</Text>
-        
-        <View style={styles.infoBox}>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Registration No:</Text>
-            <Text style={styles.infoValue}>{student.regNo}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Campus:</Text>
-            <Text style={styles.infoValue}>{student.campus}</Text>
-          </View>
+        <Text style={styles.name}>Abhigyan R. Varma</Text>
+        <Text style={styles.subtitle}>G. H. Raisoni Skilltech University, Nagpur</Text>
+      </View>
+
+      <View style={styles.infoCard}>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Department</Text>
+          <Text style={styles.infoValue}>B.Tech CSE</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Semester</Text>
+          <Text style={styles.infoValue}>4th (Section A)</Text>
+        </View>
+        <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+          <Text style={styles.infoLabel}>Reg Number</Text>
+          <Text style={styles.infoValue}>STU-2024-8992</Text>
         </View>
       </View>
 
-      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+      <Text style={styles.sectionTitle}>Preferences</Text>
+      <View style={styles.preferencesCard}>
+        <Text style={styles.preferenceLabel}>Class Reminder (Minutes Before)</Text>
+        <View style={styles.optionsRow}>
+          {REMINDER_OPTIONS.map((min) => (
+            <TouchableOpacity
+              key={min}
+              style={[
+                styles.optionButton,
+                reminderOffset === min && styles.optionButtonActive
+              ]}
+              onPress={() => handleReminderChange(min)}
+            >
+              <Text style={[
+                styles.optionText,
+                reminderOffset === min && styles.optionTextActive
+              ]}>{min}m</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <Text style={styles.logoutText}>Log Out</Text>
       </TouchableOpacity>
     </SafeAreaView>
@@ -45,16 +91,27 @@ export default function ProfileScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f3f4f6', padding: 20 },
-  card: { backgroundColor: '#ffffff', borderRadius: 16, padding: 24, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 3 },
-  avatarPlaceholder: { width: 80, height: 80, backgroundColor: '#2563eb', borderRadius: 40, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  avatarText: { fontSize: 32, color: '#fff', fontWeight: 'bold' },
-  name: { fontSize: 24, fontWeight: 'bold', color: '#1f2937' },
-  subText: { fontSize: 16, color: '#6b7280', marginBottom: 24 },
-  infoBox: { width: '100%', backgroundColor: '#f9fafb', padding: 16, borderRadius: 12 },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
-  infoLabel: { color: '#6b7280', fontSize: 14 },
-  infoValue: { color: '#1f2937', fontWeight: '600', fontSize: 14 },
-  logoutBtn: { marginTop: 'auto', backgroundColor: '#fee2e2', padding: 16, borderRadius: 12, alignItems: 'center' },
-  logoutText: { color: '#ef4444', fontWeight: 'bold', fontSize: 16 }
+  container: { flex: 1, backgroundColor: COLORS.ICE_LATTE, padding: 20 },
+  headerContainer: { alignItems: 'center', marginTop: 40, marginBottom: 30 },
+  avatarPlaceholder: { width: 100, height: 100, borderRadius: 50, backgroundColor: COLORS.THE_MINT, justifyContent: 'center', alignItems: 'center', marginBottom: 16, shadowOpacity: 0.2, elevation: 5 },
+  avatarText: { fontSize: 36, fontWeight: 'bold', color: COLORS.WHITE },
+  name: { fontSize: 24, fontWeight: '900', color: COLORS.BLACK },
+  subtitle: { fontSize: 14, color: '#666', marginTop: 4, textAlign: 'center', fontWeight: '600' },
+  
+  infoCard: { backgroundColor: COLORS.WHITE, borderRadius: 20, padding: 20, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 5, marginBottom: 24 },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  infoLabel: { fontSize: 16, color: '#666', fontWeight: '600' },
+  infoValue: { fontSize: 16, color: COLORS.BLACK, fontWeight: '800' },
+  
+  sectionTitle: { fontSize: 18, fontWeight: '900', color: COLORS.BLACK, marginBottom: 12, marginLeft: 4 },
+  preferencesCard: { backgroundColor: COLORS.WHITE, borderRadius: 20, padding: 20, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, elevation: 5 },
+  preferenceLabel: { fontSize: 15, color: '#666', fontWeight: '700', marginBottom: 16 },
+  optionsRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  optionButton: { paddingVertical: 10, flex: 1, marginHorizontal: 4, borderRadius: 12, borderWidth: 2, borderColor: COLORS.ICE_LATTE, alignItems: 'center' },
+  optionButtonActive: { backgroundColor: COLORS.THE_MINT, borderColor: COLORS.THE_MINT },
+  optionText: { fontWeight: '800', color: '#666' },
+  optionTextActive: { color: COLORS.WHITE },
+
+  logoutButton: { marginTop: 'auto', backgroundColor: COLORS.BLACK, padding: 18, borderRadius: 16, alignItems: 'center', marginBottom: 20 },
+  logoutText: { color: COLORS.WHITE, fontSize: 16, fontWeight: 'bold' }
 });
