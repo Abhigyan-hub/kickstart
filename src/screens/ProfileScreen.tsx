@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const COLORS = {
@@ -12,52 +12,96 @@ const COLORS = {
 const REMINDER_KEY = '@class_reminder_offset';
 const REMINDER_OPTIONS = [10, 20, 30, 60];
 
+// Interface matching the FastAPI backend schema
+interface StudentData {
+  id: number;
+  reg_number: string;
+  full_name: string;
+  department: string;
+  semester: number;
+  section: string;
+}
+
 export default function ProfileScreen({ navigation }: any) {
-  const [reminderOffset, setReminderOffset] = useState<number>(30); // Default to 30
+  const [reminderOffset, setReminderOffset] = useState<number>(30);
+  const [userData, setUserData] = useState<StudentData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const loadSettings = async () => {
-      const savedOffset = await AsyncStorage.getItem(REMINDER_KEY);
-      if (savedOffset) {
-        setReminderOffset(parseInt(savedOffset, 10));
+    const loadData = async () => {
+      try {
+        // Load User Profile
+        const storedUser = await AsyncStorage.getItem('@cascade_user');
+        if (storedUser) {
+          setUserData(JSON.parse(storedUser));
+        } else {
+          // If no session exists, force them to log in
+          navigation.replace('Login');
+        }
+
+        // Load Preferences[cite: 2]
+        const savedOffset = await AsyncStorage.getItem(REMINDER_KEY);
+        if (savedOffset) {
+          setReminderOffset(parseInt(savedOffset, 10));
+        }
+      } catch (e) {
+        console.error("Failed to load user data", e);
+      } finally {
+        setIsLoading(false);
       }
     };
-    loadSettings();
+    loadData();
   }, []);
 
   const handleReminderChange = async (minutes: number) => {
     setReminderOffset(minutes);
     await AsyncStorage.setItem(REMINDER_KEY, String(minutes));
-    // Note: The Timetable screen will automatically apply this new offset 
-    // the next time it calculates the schedule!
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await AsyncStorage.removeItem('@cascade_user');
     navigation.replace('Login');
   };
+
+  // Extract initials dynamically
+  const getInitials = (name: string) => {
+    const names = name.split(' ');
+    if (names.length >= 2) {
+      return `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase();
+    }
+    return name.substring(0, 2).toUpperCase();
+  };
+
+  if (isLoading || !userData) {
+    return (
+      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={COLORS.THE_MINT} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.headerContainer}>
         <View style={styles.avatarPlaceholder}>
-          <Text style={styles.avatarText}>AV</Text>
+          <Text style={styles.avatarText}>{getInitials(userData.full_name)}</Text>
         </View>
-        <Text style={styles.name}>Abhigyan R. Varma</Text>
+        <Text style={styles.name}>{userData.full_name}</Text>
         <Text style={styles.subtitle}>G. H. Raisoni Skilltech University, Nagpur</Text>
       </View>
 
       <View style={styles.infoCard}>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Department</Text>
-          <Text style={styles.infoValue}>B.Tech CSE</Text>
+          <Text style={styles.infoValue}>{userData.department}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Semester</Text>
-          <Text style={styles.infoValue}>4th (Section A)</Text>
+          <Text style={styles.infoValue}>{userData.semester}th (Section {userData.section})</Text>
         </View>
         <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
           <Text style={styles.infoLabel}>Reg Number</Text>
-          <Text style={styles.infoValue}>STU-2024-8992</Text>
+          <Text style={styles.infoValue}>{userData.reg_number}</Text>
         </View>
       </View>
 
@@ -97,12 +141,10 @@ const styles = StyleSheet.create({
   avatarText: { fontSize: 36, fontWeight: 'bold', color: COLORS.WHITE },
   name: { fontSize: 24, fontWeight: '900', color: COLORS.BLACK },
   subtitle: { fontSize: 14, color: '#666', marginTop: 4, textAlign: 'center', fontWeight: '600' },
-  
   infoCard: { backgroundColor: COLORS.WHITE, borderRadius: 20, padding: 20, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 5, marginBottom: 24 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   infoLabel: { fontSize: 16, color: '#666', fontWeight: '600' },
   infoValue: { fontSize: 16, color: COLORS.BLACK, fontWeight: '800' },
-  
   sectionTitle: { fontSize: 18, fontWeight: '900', color: COLORS.BLACK, marginBottom: 12, marginLeft: 4 },
   preferencesCard: { backgroundColor: COLORS.WHITE, borderRadius: 20, padding: 20, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, elevation: 5 },
   preferenceLabel: { fontSize: 15, color: '#666', fontWeight: '700', marginBottom: 16 },
@@ -111,7 +153,6 @@ const styles = StyleSheet.create({
   optionButtonActive: { backgroundColor: COLORS.THE_MINT, borderColor: COLORS.THE_MINT },
   optionText: { fontWeight: '800', color: '#666' },
   optionTextActive: { color: COLORS.WHITE },
-
   logoutButton: { marginTop: 'auto', backgroundColor: COLORS.BLACK, padding: 18, borderRadius: 16, alignItems: 'center', marginBottom: 20 },
   logoutText: { color: COLORS.WHITE, fontSize: 16, fontWeight: 'bold' }
 });

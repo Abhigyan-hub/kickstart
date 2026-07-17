@@ -16,7 +16,6 @@ import { launchImageLibrary } from 'react-native-image-picker';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { TimestampTrigger, TriggerType, AndroidImportance } from '@notifee/react-native';
-// ... keep your other existing imports (React, Text, View, AsyncStorage, etc.)
 
 // Unified Theme Colors
 const COLORS = {
@@ -31,7 +30,6 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const SWIPE_THRESHOLD = 80;
 const STORAGE_KEY = '@my_college_schedule';
 
-// Session flag to ensure the animation only runs once per app open
 let hasJiggledThisSession = false;
 
 type ScheduleItem = {
@@ -46,7 +44,7 @@ const SwipeableClassCard = ({
   item,
   onMarkAttendance,
   onUndo,
-  showTutorial, // New prop for the animation
+  showTutorial, 
 }: {
   item: ScheduleItem;
   onMarkAttendance: (id: string, status: 'attended' | 'absent') => void;
@@ -56,16 +54,19 @@ const SwipeableClassCard = ({
   const pan = useRef(new Animated.ValueXY()).current;
   const [hasTriggeredHaptic, setHasTriggeredHaptic] = useState(false);
 
-  // The Jiggle Animation
+  // Amplified Jiggle to clearly reveal the background text
   useEffect(() => {
     if (showTutorial && item.status === 'pending') {
       setTimeout(() => {
         Animated.sequence([
-          Animated.timing(pan, { toValue: { x: -35, y: 0 }, duration: 250, useNativeDriver: false }),
-          Animated.timing(pan, { toValue: { x: 25, y: 0 }, duration: 200, useNativeDriver: false }),
+          // Pull far left to reveal Mint (Attended)
+          Animated.timing(pan, { toValue: { x: -60, y: 0 }, duration: 300, useNativeDriver: false }),
+          // Pull far right to reveal Red (Absent)
+          Animated.timing(pan, { toValue: { x: 60, y: 0 }, duration: 300, useNativeDriver: false }),
+          // Snap back to center
           Animated.spring(pan, { toValue: { x: 0, y: 0 }, friction: 4, useNativeDriver: false })
         ]).start();
-      }, 800); // Wait just a moment for the screen to render before jiggling
+      }, 800); 
     }
   }, [showTutorial]);
 
@@ -96,12 +97,24 @@ const SwipeableClassCard = ({
     })
   ).current;
 
-  const renderSwipeBackground = () => (
-    <View style={styles.swipeBackground}>
-      <View style={{ flex: 1, backgroundColor: COLORS.ABSENT_RED }} />
-      <View style={{ flex: 1, backgroundColor: COLORS.THE_MINT }} />
-    </View>
-  );
+  // --- Real-time Reveal Animations ---
+  const dynamicBackgroundColor = pan.x.interpolate({
+    inputRange: [-80, -10, 0, 10, 80],
+    outputRange: [COLORS.THE_MINT, COLORS.THE_MINT, COLORS.ICE_LATTE, COLORS.ABSENT_RED, COLORS.ABSENT_RED],
+    extrapolate: 'clamp'
+  });
+
+  const rightTextOpacity = pan.x.interpolate({
+    inputRange: [-80, -20, 0],
+    outputRange: [1, 0.8, 0],
+    extrapolate: 'clamp'
+  });
+
+  const leftTextOpacity = pan.x.interpolate({
+    inputRange: [0, 20, 80],
+    outputRange: [0, 0.8, 1],
+    extrapolate: 'clamp'
+  });
 
   if (item.status !== 'pending') {
     return (
@@ -129,11 +142,28 @@ const SwipeableClassCard = ({
   }
 
   return (
-    <View style={styles.cardContainer}>
-      {renderSwipeBackground()}
+    // 1. The Container IS the Background layer now. 
+    // It is perfectly locked to the same shape as the card.
+    <Animated.View style={[styles.cardContainer, { backgroundColor: dynamicBackgroundColor }]}>
+      
+      {/* Revealed on Right Swipe (Absent) */}
+      <Animated.View style={[StyleSheet.absoluteFill, { justifyContent: 'center', paddingLeft: 24, opacity: leftTextOpacity }]} pointerEvents="none">
+        <Text style={styles.swipeText}>ABSENT</Text>
+      </Animated.View>
+
+      {/* Revealed on Left Swipe (Attended) */}
+      <Animated.View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'flex-end', paddingRight: 24, opacity: rightTextOpacity }]} pointerEvents="none">
+        <Text style={styles.swipeText}>ATTENDED</Text>
+      </Animated.View>
+
+      {/* 2. The Foreground Card sits INSIDE the container and translates over it */}
       <Animated.View
         {...panResponder.panHandlers}
-        style={[pan.getLayout(), styles.clayCard, styles.clayWhite]}
+        style={[
+          styles.clayCard, 
+          styles.clayWhite,
+          { transform: [{ translateX: pan.x }] } 
+        ]}
       >
         <Text style={styles.time}>{item.time}</Text>
         <View style={styles.details}>
@@ -141,15 +171,15 @@ const SwipeableClassCard = ({
           <Text style={styles.room}>{item.room}</Text>
         </View>
       </Animated.View>
-    </View>
+      
+    </Animated.View>
   );
 };
 
 const REMINDER_KEY = '@class_reminder_offset';
 
-// Helper to convert "12.10pm\n1.05pm" into a real Javascript Date object for today
 const parseStartTimeToDate = (timeString: string): Date | null => {
-  const firstTime = timeString.split('\n')[0].trim(); // Gets "12.10pm"
+  const firstTime = timeString.split('\n')[0].trim(); 
   const match = firstTime.match(/(\d{1,2})[\.:](\d{2})\s*(am|pm)/i);
   
   if (!match) return null;
@@ -165,36 +195,28 @@ const parseStartTimeToDate = (timeString: string): Date | null => {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0);
 };
 
-// The core notification engine
 const scheduleClassNotifications = async (schedule: ScheduleItem[]) => {
-  // 1. Request Permission (Required for Android 13+)
   await notifee.requestPermission();
 
-  // 2. Create the Android Channel (Required for Android 8+)
   const channelId = await notifee.createChannel({
     id: 'class-reminders',
     name: 'Class Reminders',
     importance: AndroidImportance.HIGH,
   });
 
-  // 3. Wipe old notifications to prevent duplicates if the timetable changed
   await notifee.cancelAllNotifications();
 
-  // 4. Get the user's preferred warning time from the Profile Screen
   const savedOffset = await AsyncStorage.getItem(REMINDER_KEY);
-  const reminderMinutes = savedOffset ? parseInt(savedOffset, 10) : 30; // Default 30m
+  const reminderMinutes = savedOffset ? parseInt(savedOffset, 10) : 30;
 
-  // 5. Loop through classes and set up the triggers
   for (const item of schedule) {
-    if (item.status !== 'pending') continue; // Don't alert for classes already dealt with
+    if (item.status !== 'pending') continue; 
 
     const classTime = parseStartTimeToDate(item.time);
     if (!classTime) continue;
 
-    // Subtract the offset minutes
     const triggerTime = new Date(classTime.getTime() - reminderMinutes * 60000);
 
-    // Only schedule if the alert time is in the future
     if (triggerTime.getTime() > Date.now()) {
       const trigger: TimestampTrigger = {
         type: TriggerType.TIMESTAMP,
@@ -222,7 +244,6 @@ export default function TimetableScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [shouldAnimateJiggle, setShouldAnimateJiggle] = useState(false);
 
-// Load saved schedule and handle notifications
   useEffect(() => {
     const loadSavedSchedule = async () => {
       try {
@@ -231,7 +252,6 @@ export default function TimetableScreen() {
           const parsedData = JSON.parse(savedData);
           setSchedule(parsedData);
           
-          // --> NEW: Schedule notifications whenever we load the schedule
           await scheduleClassNotifications(parsedData);
           
           if (!hasJiggledThisSession) {
@@ -332,7 +352,6 @@ export default function TimetableScreen() {
         saveScheduleToPhone(extractedClasses);
         await scheduleClassNotifications(extractedClasses);
         
-        // Trigger the jiggle manually for a newly uploaded schedule
         setShouldAnimateJiggle(true);
       } catch (error) {
         console.error("OCR Error: ", error);
@@ -387,7 +406,7 @@ export default function TimetableScreen() {
             item={item}
             onMarkAttendance={handleMarkAttendance}
             onUndo={handleUndo}
-            showTutorial={shouldAnimateJiggle && index === 0} // Only jiggle the very first card
+            showTutorial={shouldAnimateJiggle && index === 0} 
           />
         )}
         ListEmptyComponent={renderEmptyState}
@@ -415,6 +434,19 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', padding: 40 },
   emptyTitle: { fontSize: 22, fontWeight: '800', color: COLORS.BLACK, marginTop: 16 },
   emptySub: { fontSize: 15, color: '#666', textAlign: 'center', marginTop: 8, lineHeight: 22 },
+
+  // --- UPDATED CONTAINER LAYER ---
+  cardContainer: { 
+    marginBottom: 16, 
+    borderRadius: 28, // Matches the clay card perfectly so background colors don't bleed out
+  },
+  swipeText: {
+    color: COLORS.WHITE,
+    fontWeight: '900',
+    fontSize: 18,
+    letterSpacing: 1.5,
+  },
+  // -----------------------------
 
   clayCard: {
     padding: 22,
@@ -454,16 +486,7 @@ const styles = StyleSheet.create({
     borderRightColor: 'rgba(0, 0, 0, 0.15)',
     shadowColor: COLORS.ABSENT_RED,
   },
-  
-  cardContainer: { marginBottom: 16, position: 'relative' },
-  swipeBackground: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 28, 
-    flexDirection: 'row',
-    overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: 'transparent', 
-  },
+
   time: { fontSize: 16, fontWeight: '900', color: COLORS.THE_MINT, width: 80 },
   details: { flex: 1, borderLeftWidth: 2, borderLeftColor: COLORS.ICE_LATTE, paddingLeft: 16 },
   subject: { fontSize: 17, fontWeight: '800', color: COLORS.BLACK },
