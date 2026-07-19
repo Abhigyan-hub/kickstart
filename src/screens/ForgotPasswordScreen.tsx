@@ -14,14 +14,14 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import CryptoJS from 'crypto-js';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = 'http://16.170.193.134:8000'; 
+const API_BASE_URL = 'http://16.170.193.134:8000';
 
-export default function LoginScreen({ navigation }: any) {
+export default function ForgotPasswordScreen({ navigation }: any) {
+  const [step, setStep] = useState<1 | 2>(1); 
   const [regNumber, setRegNumber] = useState('');
-  const [password, setPassword] = useState('');
-  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
   const [isKeyboardVisible, setKeyboardVisible] = useState(false);
@@ -40,45 +40,69 @@ export default function LoginScreen({ navigation }: any) {
     };
   }, []);
 
-  const handleLogin = async () => {
-    if (!regNumber || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+  const handleRequestOTP = async () => {
+    if (!regNumber) {
+      Alert.alert('Error', 'Please enter your Registration Number');
       return;
     }
-
     setIsLoading(true);
-    const hashedPassword = CryptoJS.SHA256(password).toString();
-
     try {
-      const response = await fetch(`${API_BASE_URL}/login/`, {
+      const response = await fetch(`${API_BASE_URL}/auth/request-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reg_number: regNumber }),
+      });
+      if (response.ok) {
+        setStep(2); 
+      } else {
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+          const errorData = await response.json();
+          Alert.alert('Request Failed', errorData.detail || 'Could not process your request.');
+        } else {
+          const errorText = await response.text();
+          Alert.alert('Server Error', `${response.status} - ${errorText.substring(0, 40)}...`);
+        }
+      }
+    } catch (error) {
+      Alert.alert('Network Error', 'Check your connection to the server.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!otp || !newPassword) {
+      Alert.alert('Error', 'Please enter the OTP and a new password.');
+      return;
+    }
+    setIsLoading(true);
+    const hashedNewPassword = CryptoJS.SHA256(newPassword).toString();
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reg_number: regNumber,
-          password_hash: hashedPassword, 
+          otp: otp,
+          new_password_hash: hashedNewPassword,
         }),
       });
-
       if (response.ok) {
-        const userData = await response.json();
-        await AsyncStorage.setItem('@cascade_user', JSON.stringify(userData));
-        navigation.replace('MainTabs'); 
+        Alert.alert('Success', 'Your password has been updated.', [
+          { text: 'Log In', onPress: () => navigation.goBack() }
+        ]);
       } else {
         const contentType = response.headers.get("content-type");
-        let errorMessage = "An unknown error occurred.";
-
         if (contentType && contentType.indexOf("application/json") !== -1) {
           const errorData = await response.json();
-          errorMessage = errorData.detail || 'Invalid credentials';
+          Alert.alert('Reset Failed', errorData.detail || 'Invalid OTP');
         } else {
           const errorText = await response.text();
-          errorMessage = `Server Error: ${response.status} - ${errorText.substring(0, 40)}...`;
+          Alert.alert('Server Error', `${response.status} - ${errorText.substring(0, 40)}...`);
         }
-        
-        Alert.alert('Login Failed', errorMessage);
       }
     } catch (error) {
-      console.error("API Error:", error);
       Alert.alert('Network Error', 'Could not connect to the server.');
     } finally {
       setIsLoading(false);
@@ -103,40 +127,48 @@ export default function LoginScreen({ navigation }: any) {
           </View>
 
           <View style={styles.titleContainer}>
-            <Text style={styles.titleText}>Welcome.</Text>
-            <Text style={styles.titleText}>Let's get started.</Text>
+            <Text style={styles.titleText}>Welcome back.</Text>
+            <Text style={styles.titleText}>Forgot Password?</Text>
           </View>
 
           <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Registration Number"
-              placeholderTextColor="#666"
-              value={regNumber}
-              onChangeText={setRegNumber}
-              autoCapitalize="characters"
-              autoCorrect={false}
-            />
-            
-            <View style={styles.passwordContainer}>
+            {step === 1 ? (
               <TextInput
-                style={styles.passwordInput}
-                placeholder="Password"
+                style={styles.input}
+                placeholder="Registration Number"
                 placeholderTextColor="#666"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!isPasswordVisible}
-                autoCapitalize="none"
+                value={regNumber}
+                onChangeText={setRegNumber}
+                autoCapitalize="characters"
+                autoCorrect={false}
               />
-              <TouchableOpacity onPress={() => setIsPasswordVisible(!isPasswordVisible)}>
-                <Text style={styles.eyeIcon}>{isPasswordVisible ? '🙈' : '👁️'}</Text>
-              </TouchableOpacity>
-            </View>
+            ) : (
+              <>
+                <TextInput
+                  style={styles.input}
+                  placeholder="6-Digit OTP"
+                  placeholderTextColor="#666"
+                  value={otp}
+                  onChangeText={setOtp}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                />
+                <TextInput
+                  style={[styles.input, { marginTop: 30 }]}
+                  placeholder="New Password"
+                  placeholderTextColor="#666"
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </>
+            )}
           </View>
 
           <TouchableOpacity 
             style={styles.buttonWrapper} 
-            onPress={handleLogin} 
+            onPress={step === 1 ? handleRequestOTP : handleResetPassword} 
             disabled={isLoading}
           >
             <LinearGradient
@@ -148,14 +180,16 @@ export default function LoginScreen({ navigation }: any) {
               {isLoading ? (
                 <ActivityIndicator color="#000" />
               ) : (
-                <Text style={styles.buttonText}>LOG IN</Text>
+                <Text style={styles.buttonText}>
+                  {step === 1 ? 'REQUEST OTP' : 'RESET PASSWORD'}
+                </Text>
               )}
             </LinearGradient>
           </TouchableOpacity>
 
           <View style={styles.linksContainer}>
-            <TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}>
-              <Text style={styles.linkText}>Forgot your password?</Text>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <Text style={styles.linkText}>Already have an account? Sign in</Text>
             </TouchableOpacity>
           </View>
 
@@ -193,9 +227,6 @@ const styles = StyleSheet.create({
   titleText: { fontSize: 32, fontWeight: 'bold', color: '#FFF' },
   inputContainer: { marginBottom: 40 },
   input: { borderBottomWidth: 1, borderBottomColor: '#444', color: '#FFF', fontSize: 16, paddingVertical: 10, marginBottom: 10 },
-  passwordContainer: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#444', marginTop: 20 },
-  passwordInput: { flex: 1, color: '#FFF', fontSize: 16, paddingVertical: 10 },
-  eyeIcon: { fontSize: 18, padding: 10, color: '#666' },
   buttonWrapper: { width: 200, marginBottom: 30 },
   gradientButton: { paddingVertical: 14, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
   buttonText: { color: '#FFF', fontWeight: 'bold', fontSize: 14, letterSpacing: 1 },
