@@ -27,7 +27,7 @@ const COLORS = {
 // IMPORTANT API NOTE FOR REACT NATIVE:
 // If using Android Emulator, use 'http://10.0.2.2:8000'
 // If using iOS Simulator or physical device, use your computer's Wi-Fi IP (e.g., 'http://192.168.1.X:8000')
-const API_BASE_URL = 'http://192.168.1.40:8000'; 
+const API_BASE_URL = 'http://16.170.193.134:8000'; 
 
 export default function LoginScreen({ navigation }: any) {
   const [isResetMode, setIsResetMode] = useState(false);

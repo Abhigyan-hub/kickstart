@@ -245,34 +245,55 @@ export default function TimetableScreen() {
   const [shouldAnimateJiggle, setShouldAnimateJiggle] = useState(false);
 
   useEffect(() => {
-    const loadSavedSchedule = async () => {
-      try {
-        const savedData = await AsyncStorage.getItem(STORAGE_KEY);
-        if (savedData !== null) {
-          const parsedData = JSON.parse(savedData);
-          setSchedule(parsedData);
-          
-          await scheduleClassNotifications(parsedData);
-          
-          if (!hasJiggledThisSession) {
-            setShouldAnimateJiggle(true);
-            hasJiggledThisSession = true; 
+  const loadSavedSchedule = async () => {
+    try {
+      const savedDataString = await AsyncStorage.getItem(STORAGE_KEY);
+      
+      if (savedDataString !== null) {
+        // We now parse an object containing { date, schedule }
+        const parsedData = JSON.parse(savedDataString); 
+        const todayString = new Date().toDateString();
+
+        if (parsedData.date === todayString) {
+          // It is still the same day. Load the saved schedule to preserve attendance.
+          setSchedule(parsedData.schedule);
+          await scheduleClassNotifications(parsedData.schedule);
+        } else {
+          // It is a NEW day! Generate a fresh schedule matrix.
+          const savedRawText = await AsyncStorage.getItem('@raw_ocr_text');
+          if (savedRawText) {
+            const freshSchedule = parseOCRText(savedRawText);
+            setSchedule(freshSchedule);
+            saveScheduleToPhone(freshSchedule); // Save the fresh schedule for today
+            await scheduleClassNotifications(freshSchedule);
+          } else {
+             setSchedule([]); // Fallback if raw text was never saved
           }
         }
-      } catch (error) {
-        console.error("Failed to load schedule from storage", error);
+        
+        if (!hasJiggledThisSession) {
+          setShouldAnimateJiggle(true);
+          hasJiggledThisSession = true; 
+        }
       }
-    };
-    loadSavedSchedule();
-  }, []);
-
-  const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newSchedule));
     } catch (error) {
-      console.error("Failed to save schedule to storage", error);
+      console.error("Failed to load schedule from storage", error);
     }
   };
+  loadSavedSchedule();
+}, []);
+
+const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
+  try {
+    const dataToSave = {
+      date: new Date().toDateString(), // Adds a timestamp like "Mon Jul 20 2026"
+      schedule: newSchedule
+    };
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+  } catch (error) {
+    console.error("Failed to save schedule to storage", error);
+  }
+};
 
   const handleMarkAttendance = (id: string, status: 'attended' | 'absent') => {
     setTimeout(() => {
@@ -334,33 +355,37 @@ export default function TimetableScreen() {
   };
 
   const handleUploadImage = () => {
-    launchImageLibrary({ mediaType: 'photo' }, async (response) => {
-      if (response.didCancel || !response.assets || response.assets.length === 0) {
-        return;
-      }
-      
-      const imageUri = response.assets[0].uri;
-      if (!imageUri) return;
+  launchImageLibrary({ mediaType: 'photo' }, async (response) => {
+    if (response.didCancel || !response.assets || response.assets.length === 0) {
+      return;
+    }
+    
+    const imageUri = response.assets[0].uri;
+    if (!imageUri) return;
 
-      setIsScanning(true);
+    setIsScanning(true);
+    
+    try {
+      const result = await TextRecognition.recognize(imageUri);
       
-      try {
-        const result = await TextRecognition.recognize(imageUri);
-        const extractedClasses = parseOCRText(result.text);
-        
-        setSchedule(extractedClasses);
-        saveScheduleToPhone(extractedClasses);
-        await scheduleClassNotifications(extractedClasses);
-        
-        setShouldAnimateJiggle(true);
-      } catch (error) {
-        console.error("OCR Error: ", error);
-        Alert.alert("Error", "Failed to scan the image.");
-      } finally {
-        setIsScanning(false);
-      }
-    });
-  };
+      // NEW: Save the raw text permanently so we can extract times tomorrow
+      await AsyncStorage.setItem('@raw_ocr_text', result.text); 
+      
+      const extractedClasses = parseOCRText(result.text);
+      
+      setSchedule(extractedClasses);
+      saveScheduleToPhone(extractedClasses);
+      await scheduleClassNotifications(extractedClasses);
+      
+      setShouldAnimateJiggle(true);
+    } catch (error) {
+      console.error("OCR Error: ", error);
+      Alert.alert("Error", "Failed to scan the image.");
+    } finally {
+      setIsScanning(false);
+    }
+  });
+};
 
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>

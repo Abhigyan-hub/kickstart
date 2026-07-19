@@ -33,6 +33,12 @@ class Student(Base):
 
     # Establish a One-to-Many relationship with the Attendance table
     attendance_records = relationship("Attendance", back_populates="student", cascade="all, delete-orphan")
+    # NEW: Email for OTP recovery (nullable=True so it doesn't break existing mock data)
+    email = Column(String(100), unique=True, index=True, nullable=True)
+    
+    # NEW: OTP Tracking
+    reset_otp = Column(String(6), nullable=True)
+    otp_expires_at = Column(DateTime, nullable=True)
 
 
 class Attendance(Base):

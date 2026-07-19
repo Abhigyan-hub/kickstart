@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from app import models, schemas, crud
 from app.database import engine, get_db
 from app.logger import logger
+from datetime import datetime
 
 # Initialize AWS tables
 models.Base.metadata.create_all(bind=engine)
@@ -87,3 +88,55 @@ def login_student(login_data: schemas.StudentLogin, db: Session = Depends(get_db
     logger.info(f"Authentication Log: Successful login for {student.full_name} (Reg: {student.reg_number}).")
     
     return student
+
+# ==========================================
+# PASSWORD RECOVERY ROUTES
+# ==========================================
+
+def send_email_mock(to_email: str, otp: str):
+    """
+    A temporary function to simulate sending an email. 
+    This allows you to test the API flow without an SMTP server.
+    """
+    logger.info(f"MOCK EMAIL SENT TO {to_email}: Your CASCADE password reset OTP is {otp}")
+
+@app.post("/auth/request-otp", status_code=status.HTTP_200_OK)
+def request_password_reset_otp(payload: schemas.OTPRequest, db: Session = Depends(get_db)):
+    logger.info(f"Password Reset Log: OTP requested for reg_number={payload.reg_number}")
+    
+    student = crud.get_student_by_reg_number(db, payload.reg_number)
+    
+    if not student:
+        # We return a generic message to prevent malicious actors from guessing valid registration numbers
+        return {"message": "If that registration number exists, an OTP has been sent."}
+        
+    # In production, check if the student has an email registered
+    if not student.email:
+         logger.warning(f"Password Reset Error: reg_number={payload.reg_number} has no email associated.")
+         # Returning 200 to not leak that the account lacks an email to an attacker
+         return {"message": "If that registration number exists, an OTP has been sent."}
+
+    # Generate and save the OTP
+    otp = crud.generate_and_save_otp(db, student)
+    
+    # Send the email (Mocked for now)
+    send_email_mock(student.email, otp)
+    
+    return {"message": "If that registration number exists, an OTP has been sent."}
+
+
+@app.post("/auth/reset-password", status_code=status.HTTP_200_OK)
+def reset_password_with_otp(payload: schemas.OTPVerifyAndReset, db: Session = Depends(get_db)):
+    logger.info(f"Password Reset Log: Attempting to reset password for reg_number={payload.reg_number}")
+    
+    result = crud.verify_otp_and_update_password(db, payload)
+    
+    if not result["success"]:
+        logger.warning(f"Password Reset Failed: {result['message']}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result["message"]
+        )
+        
+    logger.info(f"Password Reset Log: Successfully updated password for reg_number={payload.reg_number}")
+    return {"message": "Password successfully reset."}

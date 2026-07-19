@@ -1,5 +1,7 @@
 from sqlalchemy.orm import Session
 from app import models, schemas
+import random
+from datetime import datetime, timedelta
 
 # ==========================================
 # STUDENT / AUTHENTICATION LOGIC
@@ -77,3 +79,42 @@ def update_attendance_status(db: Session, attendance_id: int, status_update: sch
         db.refresh(record)
         return record
     return None
+
+def generate_and_save_otp(db: Session, student: models.Student):
+    """Generates a 6-digit OTP, sets a 10-minute expiration, and saves it."""
+    # Generate a random 6-digit string
+    otp = str(random.randint(100000, 999999))
+    
+    # Set expiration to 10 minutes from now
+    expires = datetime.utcnow() + timedelta(minutes=10)
+    
+    student.reset_otp = otp
+    student.otp_expires_at = expires
+    
+    db.commit()
+    db.refresh(student)
+    return otp
+
+def verify_otp_and_update_password(db: Session, reset_data: schemas.OTPVerifyAndReset):
+    """Validates the OTP and updates the password if valid."""
+    student = get_student_by_reg_number(db, reset_data.reg_number)
+    
+    if not student:
+        return {"success": False, "message": "Student not found."}
+        
+    if not student.reset_otp or not student.otp_expires_at:
+        return {"success": False, "message": "No OTP requested."}
+        
+    if datetime.utcnow() > student.otp_expires_at:
+        return {"success": False, "message": "OTP has expired."}
+        
+    if student.reset_otp != reset_data.otp:
+        return {"success": False, "message": "Invalid OTP."}
+        
+    # If everything is valid, update the password and clear the OTP fields
+    student.password_hash = reset_data.new_password_hash
+    student.reset_otp = None
+    student.otp_expires_at = None
+    
+    db.commit()
+    return {"success": True, "message": "Password updated successfully."}

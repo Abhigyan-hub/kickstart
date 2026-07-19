@@ -77,3 +77,17 @@ class AttendanceResponse(AttendanceBase):
     marked_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    # ==========================================
+# 4. PASSWORD RESET (OTP) SCHEMAS
+# ==========================================
+
+class OTPRequest(BaseModel):
+    """Payload to request an OTP."""
+    reg_number: str
+
+class OTPVerifyAndReset(BaseModel):
+    """Payload to submit the OTP and the new password."""
+    reg_number: str
+    otp: str
+    new_password_hash: str
