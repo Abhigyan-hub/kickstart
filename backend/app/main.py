@@ -1,7 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
+import pytesseract
+from PIL import Image
+import io
 
 from app import models, schemas, crud
 from app.database import engine, get_db
@@ -88,6 +91,37 @@ def login_student(login_data: schemas.StudentLogin, db: Session = Depends(get_db
     logger.info(f"Authentication Log: Successful login for {student.full_name} (Reg: {student.reg_number}).")
     
     return student
+
+# ==========================================
+# TIMETABLE OCR ROUTE
+# ==========================================
+
+@app.post("/upload-timetable/", status_code=status.HTTP_200_OK)
+async def process_timetable(file: UploadFile = File(...)):
+    """Receives a timetable image from the mobile app and returns the extracted OCR text."""
+    logger.info(f"OCR Log: Receiving timetable image for processing: {file.filename}")
+    
+    try:
+        # 1. Read the image bytes from the incoming request
+        image_bytes = await file.read()
+        
+        # 2. Open the image using Pillow (PIL)
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # 3. Pass the image to Tesseract to extract the raw text
+        raw_text = pytesseract.image_to_string(image)
+        
+        logger.info("OCR Log: Successfully extracted text from the image.")
+        
+        # 4. Return the text exactly as the React Native app expects it
+        return {"text": raw_text}
+        
+    except BaseException as e:
+        logger.error(f"OCR Processing Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process the timetable image on the server."
+        )
 
 # ==========================================
 # PASSWORD RECOVERY ROUTES

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import notifee from '@notifee/react-native';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -39,7 +40,7 @@ export default function ProfileScreen({ navigation }: any) {
           navigation.replace('Login');
         }
 
-        // Load Preferences[cite: 2]
+        // Load Preferences
         const savedOffset = await AsyncStorage.getItem(REMINDER_KEY);
         if (savedOffset) {
           setReminderOffset(parseInt(savedOffset, 10));
@@ -59,7 +60,17 @@ export default function ProfileScreen({ navigation }: any) {
   };
 
   const handleLogout = async () => {
+    // 1. Cancel all scheduled background notifications immediately
+    await notifee.cancelAllNotifications();
+
+    // 2. Remove the user session so they have to log in again
     await AsyncStorage.removeItem('@cascade_user');
+
+    // 3. Remove the timetable data 
+    // Update this key if your timetable data is saved under a different key
+    await AsyncStorage.removeItem('@your_timetable_key'); 
+
+    // 4. Navigate back to the login screen
     navigation.replace('Login');
   };
 

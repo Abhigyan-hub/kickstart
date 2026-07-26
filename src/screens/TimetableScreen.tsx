@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { launchImageLibrary } from 'react-native-image-picker';
-import TextRecognition from '@react-native-ml-kit/text-recognition';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { TimestampTrigger, TriggerType, AndroidImportance } from '@notifee/react-native';
 
@@ -198,10 +197,13 @@ const parseStartTimeToDate = (timeString: string): Date | null => {
 const scheduleClassNotifications = async (schedule: ScheduleItem[]) => {
   await notifee.requestPermission();
 
+  // Recreate the channel with the custom zig-zag vibration pattern
   const channelId = await notifee.createChannel({
     id: 'class-reminders',
     name: 'Class Reminders',
     importance: AndroidImportance.HIGH,
+    vibration: true,
+    vibrationPattern: [300, 150, 300, 150, 300], // Zig-zag pattern: vibrate, pause, vibrate, pause, vibrate
   });
 
   await notifee.cancelAllNotifications();
@@ -231,6 +233,7 @@ const scheduleClassNotifications = async (schedule: ScheduleItem[]) => {
           android: {
             channelId,
             pressAction: { id: 'default' },
+            showTimestamp: true, // Forces Android to show the exact time it was pushed
           },
         },
         trigger,
@@ -245,55 +248,55 @@ export default function TimetableScreen() {
   const [shouldAnimateJiggle, setShouldAnimateJiggle] = useState(false);
 
   useEffect(() => {
-  const loadSavedSchedule = async () => {
-    try {
-      const savedDataString = await AsyncStorage.getItem(STORAGE_KEY);
-      
-      if (savedDataString !== null) {
-        // We now parse an object containing { date, schedule }
-        const parsedData = JSON.parse(savedDataString); 
-        const todayString = new Date().toDateString();
+    const loadSavedSchedule = async () => {
+      try {
+        const savedDataString = await AsyncStorage.getItem(STORAGE_KEY);
+        
+        if (savedDataString !== null) {
+          // We now parse an object containing { date, schedule }
+          const parsedData = JSON.parse(savedDataString); 
+          const todayString = new Date().toDateString();
 
-        if (parsedData.date === todayString) {
-          // It is still the same day. Load the saved schedule to preserve attendance.
-          setSchedule(parsedData.schedule);
-          await scheduleClassNotifications(parsedData.schedule);
-        } else {
-          // It is a NEW day! Generate a fresh schedule matrix.
-          const savedRawText = await AsyncStorage.getItem('@raw_ocr_text');
-          if (savedRawText) {
-            const freshSchedule = parseOCRText(savedRawText);
-            setSchedule(freshSchedule);
-            saveScheduleToPhone(freshSchedule); // Save the fresh schedule for today
-            await scheduleClassNotifications(freshSchedule);
+          if (parsedData.date === todayString) {
+            // It is still the same day. Load the saved schedule to preserve attendance.
+            setSchedule(parsedData.schedule);
+            await scheduleClassNotifications(parsedData.schedule);
           } else {
-             setSchedule([]); // Fallback if raw text was never saved
+            // It is a NEW day! Generate a fresh schedule matrix.
+            const savedRawText = await AsyncStorage.getItem('@raw_ocr_text');
+            if (savedRawText) {
+              const freshSchedule = parseOCRText(savedRawText);
+              setSchedule(freshSchedule);
+              saveScheduleToPhone(freshSchedule); // Save the fresh schedule for today
+              await scheduleClassNotifications(freshSchedule);
+            } else {
+               setSchedule([]); // Fallback if raw text was never saved
+            }
+          }
+          
+          if (!hasJiggledThisSession) {
+            setShouldAnimateJiggle(true);
+            hasJiggledThisSession = true; 
           }
         }
-        
-        if (!hasJiggledThisSession) {
-          setShouldAnimateJiggle(true);
-          hasJiggledThisSession = true; 
-        }
+      } catch (error) {
+        console.error("Failed to load schedule from storage", error);
       }
+    };
+    loadSavedSchedule();
+  }, []);
+
+  const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
+    try {
+      const dataToSave = {
+        date: new Date().toDateString(), // Adds a timestamp like "Mon Jul 20 2026"
+        schedule: newSchedule
+      };
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
     } catch (error) {
-      console.error("Failed to load schedule from storage", error);
+      console.error("Failed to save schedule to storage", error);
     }
   };
-  loadSavedSchedule();
-}, []);
-
-const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
-  try {
-    const dataToSave = {
-      date: new Date().toDateString(), // Adds a timestamp like "Mon Jul 20 2026"
-      schedule: newSchedule
-    };
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
-  } catch (error) {
-    console.error("Failed to save schedule to storage", error);
-  }
-};
 
   const handleMarkAttendance = (id: string, status: 'attended' | 'absent') => {
     setTimeout(() => {
@@ -314,78 +317,124 @@ const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
   };
 
   const parseOCRText = (rawText: string): ScheduleItem[] => {
-    const currentDayIndex = new Date().getDay(); 
-    const timeRegex = /\d{1,2}\.\d{2}\s*(?:pm|am)?\s*(?:-|to)\s*\d{1,2}\.\d{2}\s*(?:pm|am)?/gi;
-    const timeMatches = rawText.match(timeRegex) || [];
+    // 1. Determine today's day abbreviation to locate the correct row
+    const dayNames = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+    const currentDay = dayNames[new Date().getDay()];
 
-    const formattedTimes = timeMatches.map(t => {
-      let clean = t.trim().replace(/\s*to\s*/, '\n');
-      return clean.replace(/-/, '\n');
-    });
+    // 2. Extract the header row of times
+    const timeRegex = /\d{1,2}(?:\.|\:)\d{2}\s*(?:pm|am)?\s*(?:-|to)\s*\d{1,2}(?:\.|\:)\d{2}\s*(?:pm|am)?/gi;
+    const times = rawText.match(timeRegex) || [];
+    const cleanTimes = times.map(t => t.replace(/-|to/g, '\n').trim());
 
-    const masterSchedule: Record<number, { tIndex: number, sub: string }[]> = {
-      1: [{ tIndex: 0, sub: 'OS (AM)' }, { tIndex: 1, sub: 'CN (SL)' }, { tIndex: 3, sub: 'DVPBI (YN)' }, { tIndex: 4, sub: '(PEC1) Cloud Comp(SL)' }],
-      2: [{ tIndex: 0, sub: 'DVPBI (YN)' }, { tIndex: 1, sub: 'FLA (SN)' }, { tIndex: 3, sub: 'C310 (SL)' }],
-      3: [{ tIndex: 0, sub: 'OS (A3) C315 (AM)' }, { tIndex: 1, sub: 'CN (A1) C316 (SL)' }, { tIndex: 3, sub: 'OS (A1) C318 (AM)' }, { tIndex: 6, sub: '(PEC1) Cloud Comp(SL)' }],
-      4: [{ tIndex: 0, sub: 'FLA (SN)' }, { tIndex: 1, sub: 'DVPBI (YN)' }, { tIndex: 3, sub: 'OS (AM)' }, { tIndex: 4, sub: 'OE-III' }, { tIndex: 6, sub: '(PEC1) Cloud Comp(SL)' }],
-      5: [{ tIndex: 0, sub: 'OS (AM)' }, { tIndex: 1, sub: 'FLA (SN)' }, { tIndex: 3, sub: 'RM (NF4)' }, { tIndex: 4, sub: 'OE-III' }, { tIndex: 6, sub: 'CN (SL)' }],
-      6: [{ tIndex: 0, sub: 'RM(A1,A2,A3) (NF4)' }]
-    };
+    // 3. Extract ONLY the text block for TODAY
+    // This regex grabs everything after "MON" until it hits "TUE" (or another day)
+    const dayRegex = new RegExp(`${currentDay}[\\s\\S]*?(?=(?:SUN|MON|TUE|WED|THU|FRI|SAT|$))`, 'i');
+    const dayMatch = rawText.match(dayRegex);
 
-    const todaysClasses = masterSchedule[currentDayIndex] || [];
+    if (!dayMatch || cleanTimes.length === 0) {
+      return []; // Return empty if it's Sunday or the OCR failed completely
+    }
+
+    // Split today's text chunk into individual lines, skipping the day name itself
+    let classLines = dayMatch[0].split('\n').map(line => line.trim()).filter(Boolean).slice(1);
+    
     const parsedSchedule: ScheduleItem[] = [];
+    let timeIndex = 0;
 
-    todaysClasses.forEach((classBlock, index) => {
-      const timeString = formattedTimes[classBlock.tIndex] || "TBA";
+    for (let line of classLines) {
+      if (timeIndex >= cleanTimes.length) break;
+
+      // Skip lines that are just "RECESS" or random OCR noise
+      if (line.toUpperCase().includes('RECESS') || line.length < 3) {
+        continue;
+      }
+
+      // 4. FILTER OUT CLASSROOMS (The blue text from your image)
+      // This removes C315, A-232A, A303, A017, NF, etc.
+      let cleanSubject = line.replace(/\b[A-Z]-?\d{3}[A-Z]?\b|\bNF\d*\b/gi, '').trim();
+
+      // Clean up double spaces or floating parentheses left behind by the removed room codes
+      cleanSubject = cleanSubject.replace(/\s+/g, ' ').replace(/\(\s*\)/g, '').trim();
+
       parsedSchedule.push({
-        id: String(index + 1),
-        time: timeString,
-        subject: classBlock.sub,
+        id: String(timeIndex + 1),
+        time: cleanTimes[timeIndex] || "TBA",
+        subject: cleanSubject, // Now perfectly holds Subject (Pink), Batch (Orange), and Faculty (Grey)
         room: 'SLIDE TO MARK ATTENDANCE',
         status: 'pending'
       });
-    });
 
-    if (parsedSchedule.length === 0) {
-      Alert.alert("No Classes Today", "It's the weekend or no schedule is mapped for today!");
-      return [];
+      timeIndex++;
     }
 
     return parsedSchedule;
   };
 
   const handleUploadImage = () => {
-  launchImageLibrary({ mediaType: 'photo' }, async (response) => {
-    if (response.didCancel || !response.assets || response.assets.length === 0) {
-      return;
-    }
-    
-    const imageUri = response.assets[0].uri;
-    if (!imageUri) return;
+    launchImageLibrary({ mediaType: 'photo' }, async (response) => {
+      if (response.didCancel || !response.assets || response.assets.length === 0) {
+        return;
+      }
+      
+      const imageUri = response.assets[0].uri;
+      if (!imageUri) return;
 
-    setIsScanning(true);
-    
-    try {
-      const result = await TextRecognition.recognize(imageUri);
+      setIsScanning(true);
       
-      // NEW: Save the raw text permanently so we can extract times tomorrow
-      await AsyncStorage.setItem('@raw_ocr_text', result.text); 
-      
-      const extractedClasses = parseOCRText(result.text);
-      
-      setSchedule(extractedClasses);
-      saveScheduleToPhone(extractedClasses);
-      await scheduleClassNotifications(extractedClasses);
-      
-      setShouldAnimateJiggle(true);
-    } catch (error) {
-      console.error("OCR Error: ", error);
-      Alert.alert("Error", "Failed to scan the image.");
-    } finally {
-      setIsScanning(false);
-    }
-  });
-};
+      try {
+        // 1. Package the image for the AWS backend
+        const formData = new FormData();
+        formData.append('file', {
+          uri: imageUri,
+          type: response.assets[0].type || 'image/jpeg',
+          name: response.assets[0].fileName || 'timetable.jpg',
+        } as any);
+
+        // 2. Send the POST request to your FastAPI EC2 server
+        // IMPORTANT: Replace with your actual EC2 IP/Domain
+        const awsEndpoint = 'http://16.170.193.134:8000/upload-timetable/'; 
+        
+        const apiResponse = await fetch(awsEndpoint, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+
+        if (!apiResponse.ok) {
+          throw new Error(`Server responded with status ${apiResponse.status}`);
+        }
+
+        // 3. Extract the text payload from the FastAPI JSON response
+        const result = await apiResponse.json();
+        const extractedText = result.text; 
+
+        if (!extractedText) {
+            throw new Error("No text returned from the backend");
+        }
+
+        // 4. Save the raw text and process it through the local grid parser
+        await AsyncStorage.setItem('@raw_ocr_text', extractedText); 
+        
+        const extractedClasses = parseOCRText(extractedText);
+        
+        setSchedule(extractedClasses);
+        saveScheduleToPhone(extractedClasses);
+        await scheduleClassNotifications(extractedClasses);
+        
+        // 5. Trigger success interactions
+        ReactNativeHapticFeedback.trigger('notificationSuccess', { enableVibrateFallback: true });
+        setShouldAnimateJiggle(true);
+      } catch (error) {
+        console.error("Backend OCR Error: ", error);
+        ReactNativeHapticFeedback.trigger('notificationError', { enableVibrateFallback: true });
+        Alert.alert("Server Error", "Failed to process the timetable on the backend. Check your EC2 connection.");
+      } finally {
+        setIsScanning(false);
+      }
+    });
+  };
 
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
@@ -409,7 +458,7 @@ const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.header}>My Schedule</Text>
-          <Text style={styles.subHeader}>G. H. Raisoni Skilltech University</Text>
+          <Text style={styles.subHeader}>G H Raisoni Skilltech University</Text>
         </View>
         
         {schedule.length === 0 ? (
