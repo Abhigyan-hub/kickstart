@@ -1,4 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Request
+import os
+from dotenv import load_dotenv
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Request, Security
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
@@ -10,6 +13,31 @@ from app import models, schemas, crud
 from app.database import engine, get_db
 from app.logger import logger
 from datetime import datetime
+
+# ==========================================
+# ENVIRONMENT VARIABLES & SECURITY
+# ==========================================
+load_dotenv()
+
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+if not ADMIN_API_KEY:
+    raise ValueError("FATAL ERROR: ADMIN_API_KEY is not set in the .env file.")
+
+HEADER_NAME = os.getenv("API_KEY_HEADER_NAME", "X-Admin-Key")
+api_key_header = APIKeyHeader(name=HEADER_NAME, auto_error=True)
+
+def verify_admin_key(api_key: str = Security(api_key_header)):
+    if api_key != ADMIN_API_KEY:
+        logger.warning("Security Breach Attempt: Invalid Admin API Key provided.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Could not validate admin credentials."
+        )
+    return api_key
+
+# ==========================================
+# APP INITIALIZATION
+# ==========================================
 
 # Initialize AWS tables
 models.Base.metadata.create_all(bind=engine)
@@ -45,7 +73,12 @@ def read_root(request: Request):
 # ==========================================
 
 @app.post("/admin/students/", response_model=schemas.StudentResponse, status_code=status.HTTP_201_CREATED)
-def admin_create_student(student: schemas.StudentCreate, request: Request, db: Session = Depends(get_db)):
+def admin_create_student(
+    student: schemas.StudentCreate, 
+    request: Request, 
+    db: Session = Depends(get_db),
+    api_key: str = Depends(verify_admin_key) # <-- Security lock activated
+):
     """Admin route to manually register a new student."""
     client_ip = request.client.host
     logger.info(f"API Log [IP: {client_ip}]: Admin attempting to create student profile for reg_number={student.reg_number}")

@@ -184,7 +184,7 @@ const scheduleClassNotifications = async (schedule: ScheduleItem[]) => {
     name: 'Class Reminders',
     importance: AndroidImportance.HIGH,
     vibration: true,
-    vibrationPattern: [300, 150, 300, 150, 300],
+    vibrationPattern: [300, 150, 300, 150, 300, 150],
   });
 
   await notifee.cancelAllNotifications();
