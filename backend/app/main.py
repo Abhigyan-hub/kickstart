@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
@@ -35,8 +35,9 @@ app.add_middleware(
 )
 
 @app.get("/")
-def read_root():
-    logger.debug("API Log: Health check endpoint accessed.")
+def read_root(request: Request):
+    client_ip = request.client.host
+    logger.debug(f"API Log [IP: {client_ip}]: Health check endpoint accessed.")
     return {"status": "online"}
 
 # ==========================================
@@ -44,15 +45,15 @@ def read_root():
 # ==========================================
 
 @app.post("/admin/students/", response_model=schemas.StudentResponse, status_code=status.HTTP_201_CREATED)
-def admin_create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)):
+def admin_create_student(student: schemas.StudentCreate, request: Request, db: Session = Depends(get_db)):
     """Admin route to manually register a new student."""
-    
-    logger.info(f"API Log: Admin attempting to create student profile for reg_number={student.reg_number}")
+    client_ip = request.client.host
+    logger.info(f"API Log [IP: {client_ip}]: Admin attempting to create student profile for reg_number={student.reg_number}")
     
     # Check if the registration number already exists
     existing_student = crud.get_student_by_reg_number(db, reg_number=student.reg_number)
     if existing_student:
-        logger.error(f"Security/API Error: Failed to create student. reg_number={student.reg_number} already exists in the system.")
+        logger.error(f"Security/API Error [IP: {client_ip}]: Failed to create student. reg_number={student.reg_number} already exists in the system.")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Registration number is already registered."
@@ -62,7 +63,7 @@ def admin_create_student(student: schemas.StudentCreate, db: Session = Depends(g
     new_student = crud.create_student(db, student=student)
     
     # Audit Log: Notice we explicitly log the name and ID, but NOT the payload containing the password
-    logger.info(f"Audit Log: Successfully created student profile for {new_student.full_name} (ID: {new_student.id}, Reg: {new_student.reg_number}).")
+    logger.info(f"Audit Log [IP: {client_ip}]: Successfully created student profile for {new_student.full_name} (ID: {new_student.id}, Reg: {new_student.reg_number}).")
     
     return new_student
 
@@ -71,24 +72,24 @@ def admin_create_student(student: schemas.StudentCreate, db: Session = Depends(g
 # ==========================================
 
 @app.post("/login/", response_model=schemas.StudentResponse, status_code=status.HTTP_200_OK)
-def login_student(login_data: schemas.StudentLogin, db: Session = Depends(get_db)):
+def login_student(login_data: schemas.StudentLogin, request: Request, db: Session = Depends(get_db)):
     """Authenticates a student using their Registration Number and password hash."""
-    
-    logger.info(f"Authentication Log: Login attempt for reg_number={login_data.reg_number}")
+    client_ip = request.client.host
+    logger.info(f"Authentication Log [IP: {client_ip}]: Login attempt for reg_number={login_data.reg_number}")
     
     # Check the credentials against the database
     student = crud.verify_student_login(db, login_data)
     
     if not student:
         # If it fails, log the security event and return a 401 Unauthorized error
-        logger.warning(f"Security Log: Failed login attempt for reg_number={login_data.reg_number}. Invalid credentials.")
+        logger.warning(f"Security Log [IP: {client_ip}]: Failed login attempt for reg_number={login_data.reg_number}. Invalid credentials.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid registration number or password."
         )
         
     # If successful, log it and return the student profile
-    logger.info(f"Authentication Log: Successful login for {student.full_name} (Reg: {student.reg_number}).")
+    logger.info(f"Authentication Log [IP: {client_ip}]: Successful login for {student.full_name} (Reg: {student.reg_number}).")
     
     return student
 
@@ -97,9 +98,10 @@ def login_student(login_data: schemas.StudentLogin, db: Session = Depends(get_db
 # ==========================================
 
 @app.post("/upload-timetable/", status_code=status.HTTP_200_OK)
-async def process_timetable(file: UploadFile = File(...)):
+async def process_timetable(request: Request, file: UploadFile = File(...)):
     """Receives a timetable image from the mobile app and returns the extracted OCR text."""
-    logger.info(f"OCR Log: Receiving timetable image for processing: {file.filename}")
+    client_ip = request.client.host
+    logger.info(f"OCR Log [IP: {client_ip}]: Receiving timetable image for processing: {file.filename}")
     
     try:
         # 1. Read the image bytes from the incoming request
@@ -111,17 +113,17 @@ async def process_timetable(file: UploadFile = File(...)):
         # 3. Pass the image to Tesseract to extract the raw text
         raw_text = pytesseract.image_to_string(image)
         
-        # UPDATED: Log the exact length of the extracted text
-        logger.info(f"OCR Log: Successfully extracted {len(raw_text.strip())} characters from the image.")
+        # Log the exact length of the extracted text
+        logger.info(f"OCR Log [IP: {client_ip}]: Successfully extracted {len(raw_text.strip())} characters from the image.")
         
         if not raw_text.strip():
-            logger.warning("OCR Log: Warning - Tesseract returned completely blank text!")
+            logger.warning(f"OCR Log [IP: {client_ip}]: Warning - Tesseract returned completely blank text!")
         
         # 4. Return the text exactly as the React Native app expects it
         return {"text": raw_text}
         
     except BaseException as e:
-        logger.error(f"OCR Processing Error: {str(e)}")
+        logger.error(f"OCR Processing Error [IP: {client_ip}]: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process the timetable image on the server."
@@ -139,8 +141,9 @@ def send_email_mock(to_email: str, otp: str):
     logger.info(f"MOCK EMAIL SENT TO {to_email}: Your CASCADE password reset OTP is {otp}")
 
 @app.post("/auth/request-otp", status_code=status.HTTP_200_OK)
-def request_password_reset_otp(payload: schemas.OTPRequest, db: Session = Depends(get_db)):
-    logger.info(f"Password Reset Log: OTP requested for reg_number={payload.reg_number}")
+def request_password_reset_otp(payload: schemas.OTPRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = request.client.host
+    logger.info(f"Password Reset Log [IP: {client_ip}]: OTP requested for reg_number={payload.reg_number}")
     
     student = crud.get_student_by_reg_number(db, payload.reg_number)
     
@@ -150,7 +153,7 @@ def request_password_reset_otp(payload: schemas.OTPRequest, db: Session = Depend
         
     # In production, check if the student has an email registered
     if not student.email:
-         logger.warning(f"Password Reset Error: reg_number={payload.reg_number} has no email associated.")
+         logger.warning(f"Password Reset Error [IP: {client_ip}]: reg_number={payload.reg_number} has no email associated.")
          # Returning 200 to not leak that the account lacks an email to an attacker
          return {"message": "If that registration number exists, an OTP has been sent."}
 
@@ -164,17 +167,18 @@ def request_password_reset_otp(payload: schemas.OTPRequest, db: Session = Depend
 
 
 @app.post("/auth/reset-password", status_code=status.HTTP_200_OK)
-def reset_password_with_otp(payload: schemas.OTPVerifyAndReset, db: Session = Depends(get_db)):
-    logger.info(f"Password Reset Log: Attempting to reset password for reg_number={payload.reg_number}")
+def reset_password_with_otp(payload: schemas.OTPVerifyAndReset, request: Request, db: Session = Depends(get_db)):
+    client_ip = request.client.host
+    logger.info(f"Password Reset Log [IP: {client_ip}]: Attempting to reset password for reg_number={payload.reg_number}")
     
     result = crud.verify_otp_and_update_password(db, payload)
     
     if not result["success"]:
-        logger.warning(f"Password Reset Failed: {result['message']}")
+        logger.warning(f"Password Reset Failed [IP: {client_ip}]: {result['message']}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result["message"]
         )
         
-    logger.info(f"Password Reset Log: Successfully updated password for reg_number={payload.reg_number}")
+    logger.info(f"Password Reset Log [IP: {client_ip}]: Successfully updated password for reg_number={payload.reg_number}")
     return {"message": "Password successfully reset."}
