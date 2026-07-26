@@ -53,16 +53,12 @@ const SwipeableClassCard = ({
   const pan = useRef(new Animated.ValueXY()).current;
   const [hasTriggeredHaptic, setHasTriggeredHaptic] = useState(false);
 
-  // Amplified Jiggle to clearly reveal the background text
   useEffect(() => {
     if (showTutorial && item.status === 'pending') {
       setTimeout(() => {
         Animated.sequence([
-          // Pull far left to reveal Mint (Attended)
           Animated.timing(pan, { toValue: { x: -60, y: 0 }, duration: 300, useNativeDriver: false }),
-          // Pull far right to reveal Red (Absent)
           Animated.timing(pan, { toValue: { x: 60, y: 0 }, duration: 300, useNativeDriver: false }),
-          // Snap back to center
           Animated.spring(pan, { toValue: { x: 0, y: 0 }, friction: 4, useNativeDriver: false })
         ]).start();
       }, 800); 
@@ -96,7 +92,6 @@ const SwipeableClassCard = ({
     })
   ).current;
 
-  // --- Real-time Reveal Animations ---
   const dynamicBackgroundColor = pan.x.interpolate({
     inputRange: [-80, -10, 0, 10, 80],
     outputRange: [COLORS.THE_MINT, COLORS.THE_MINT, COLORS.ICE_LATTE, COLORS.ABSENT_RED, COLORS.ABSENT_RED],
@@ -141,28 +136,16 @@ const SwipeableClassCard = ({
   }
 
   return (
-    // 1. The Container IS the Background layer now. 
-    // It is perfectly locked to the same shape as the card.
     <Animated.View style={[styles.cardContainer, { backgroundColor: dynamicBackgroundColor }]}>
-      
-      {/* Revealed on Right Swipe (Absent) */}
       <Animated.View style={[StyleSheet.absoluteFill, { justifyContent: 'center', paddingLeft: 24, opacity: leftTextOpacity }]} pointerEvents="none">
         <Text style={styles.swipeText}>ABSENT</Text>
       </Animated.View>
-
-      {/* Revealed on Left Swipe (Attended) */}
       <Animated.View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'flex-end', paddingRight: 24, opacity: rightTextOpacity }]} pointerEvents="none">
         <Text style={styles.swipeText}>ATTENDED</Text>
       </Animated.View>
-
-      {/* 2. The Foreground Card sits INSIDE the container and translates over it */}
       <Animated.View
         {...panResponder.panHandlers}
-        style={[
-          styles.clayCard, 
-          styles.clayWhite,
-          { transform: [{ translateX: pan.x }] } 
-        ]}
+        style={[styles.clayCard, styles.clayWhite, { transform: [{ translateX: pan.x }] }]}
       >
         <Text style={styles.time}>{item.time}</Text>
         <View style={styles.details}>
@@ -170,7 +153,6 @@ const SwipeableClassCard = ({
           <Text style={styles.room}>{item.room}</Text>
         </View>
       </Animated.View>
-      
     </Animated.View>
   );
 };
@@ -197,13 +179,12 @@ const parseStartTimeToDate = (timeString: string): Date | null => {
 const scheduleClassNotifications = async (schedule: ScheduleItem[]) => {
   await notifee.requestPermission();
 
-  // Recreate the channel with the custom zig-zag vibration pattern
   const channelId = await notifee.createChannel({
     id: 'class-reminders',
     name: 'Class Reminders',
     importance: AndroidImportance.HIGH,
     vibration: true,
-    vibrationPattern: [300, 150, 300, 150, 300], // Zig-zag pattern: vibrate, pause, vibrate, pause, vibrate
+    vibrationPattern: [300, 150, 300, 150, 300],
   });
 
   await notifee.cancelAllNotifications();
@@ -233,7 +214,7 @@ const scheduleClassNotifications = async (schedule: ScheduleItem[]) => {
           android: {
             channelId,
             pressAction: { id: 'default' },
-            showTimestamp: true, // Forces Android to show the exact time it was pushed
+            showTimestamp: true,
           },
         },
         trigger,
@@ -253,24 +234,21 @@ export default function TimetableScreen() {
         const savedDataString = await AsyncStorage.getItem(STORAGE_KEY);
         
         if (savedDataString !== null) {
-          // We now parse an object containing { date, schedule }
           const parsedData = JSON.parse(savedDataString); 
           const todayString = new Date().toDateString();
 
           if (parsedData.date === todayString) {
-            // It is still the same day. Load the saved schedule to preserve attendance.
             setSchedule(parsedData.schedule);
             await scheduleClassNotifications(parsedData.schedule);
           } else {
-            // It is a NEW day! Generate a fresh schedule matrix.
             const savedRawText = await AsyncStorage.getItem('@raw_ocr_text');
             if (savedRawText) {
               const freshSchedule = parseOCRText(savedRawText);
               setSchedule(freshSchedule);
-              saveScheduleToPhone(freshSchedule); // Save the fresh schedule for today
+              saveScheduleToPhone(freshSchedule);
               await scheduleClassNotifications(freshSchedule);
             } else {
-               setSchedule([]); // Fallback if raw text was never saved
+               setSchedule([]); 
             }
           }
           
@@ -289,7 +267,7 @@ export default function TimetableScreen() {
   const saveScheduleToPhone = async (newSchedule: ScheduleItem[]) => {
     try {
       const dataToSave = {
-        date: new Date().toDateString(), // Adds a timestamp like "Mon Jul 20 2026"
+        date: new Date().toDateString(),
         schedule: newSchedule
       };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
@@ -317,25 +295,26 @@ export default function TimetableScreen() {
   };
 
   const parseOCRText = (rawText: string): ScheduleItem[] => {
-    // 1. Determine today's day abbreviation to locate the correct row
     const dayNames = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
-    const currentDay = dayNames[new Date().getDay()];
+    let currentDay = dayNames[new Date().getDay()];
 
-    // 2. Extract the header row of times
+    // --- SUNDAY FIX ---
+    // If testing on Sunday, default to Monday to ensure classes show up
+    if (currentDay === "SUN") {
+      currentDay = "MON";
+    }
+
     const timeRegex = /\d{1,2}(?:\.|\:)\d{2}\s*(?:pm|am)?\s*(?:-|to)\s*\d{1,2}(?:\.|\:)\d{2}\s*(?:pm|am)?/gi;
     const times = rawText.match(timeRegex) || [];
     const cleanTimes = times.map(t => t.replace(/-|to/g, '\n').trim());
 
-    // 3. Extract ONLY the text block for TODAY
-    // This regex grabs everything after "MON" until it hits "TUE" (or another day)
     const dayRegex = new RegExp(`${currentDay}[\\s\\S]*?(?=(?:SUN|MON|TUE|WED|THU|FRI|SAT|$))`, 'i');
     const dayMatch = rawText.match(dayRegex);
 
     if (!dayMatch || cleanTimes.length === 0) {
-      return []; // Return empty if it's Sunday or the OCR failed completely
+      return []; 
     }
 
-    // Split today's text chunk into individual lines, skipping the day name itself
     let classLines = dayMatch[0].split('\n').map(line => line.trim()).filter(Boolean).slice(1);
     
     const parsedSchedule: ScheduleItem[] = [];
@@ -344,22 +323,17 @@ export default function TimetableScreen() {
     for (let line of classLines) {
       if (timeIndex >= cleanTimes.length) break;
 
-      // Skip lines that are just "RECESS" or random OCR noise
       if (line.toUpperCase().includes('RECESS') || line.length < 3) {
         continue;
       }
 
-      // 4. FILTER OUT CLASSROOMS (The blue text from your image)
-      // This removes C315, A-232A, A303, A017, NF, etc.
       let cleanSubject = line.replace(/\b[A-Z]-?\d{3}[A-Z]?\b|\bNF\d*\b/gi, '').trim();
-
-      // Clean up double spaces or floating parentheses left behind by the removed room codes
       cleanSubject = cleanSubject.replace(/\s+/g, ' ').replace(/\(\s*\)/g, '').trim();
 
       parsedSchedule.push({
         id: String(timeIndex + 1),
         time: cleanTimes[timeIndex] || "TBA",
-        subject: cleanSubject, // Now perfectly holds Subject (Pink), Batch (Orange), and Faculty (Grey)
+        subject: cleanSubject, 
         room: 'SLIDE TO MARK ATTENDANCE',
         status: 'pending'
       });
@@ -371,7 +345,12 @@ export default function TimetableScreen() {
   };
 
   const handleUploadImage = () => {
-    launchImageLibrary({ mediaType: 'photo' }, async (response) => {
+    launchImageLibrary({ 
+      mediaType: 'photo',
+      maxWidth: 1600, // COMPRESSING TO PREVENT TIMEOUTS
+      maxHeight: 1600,
+      quality: 0.8
+    }, async (response) => {
       if (response.didCancel || !response.assets || response.assets.length === 0) {
         return;
       }
@@ -382,7 +361,6 @@ export default function TimetableScreen() {
       setIsScanning(true);
       
       try {
-        // 1. Package the image for the AWS backend
         const formData = new FormData();
         formData.append('file', {
           uri: imageUri,
@@ -390,8 +368,6 @@ export default function TimetableScreen() {
           name: response.assets[0].fileName || 'timetable.jpg',
         } as any);
 
-        // 2. Send the POST request to your FastAPI EC2 server
-        // IMPORTANT: Replace with your actual EC2 IP/Domain
         const awsEndpoint = 'http://16.170.193.134:8000/upload-timetable/'; 
         
         const apiResponse = await fetch(awsEndpoint, {
@@ -403,18 +379,17 @@ export default function TimetableScreen() {
         });
 
         if (!apiResponse.ok) {
-          throw new Error(`Server responded with status ${apiResponse.status}`);
+          throw new Error(`Server responded with HTTP ${apiResponse.status}`);
         }
 
-        // 3. Extract the text payload from the FastAPI JSON response
         const result = await apiResponse.json();
         const extractedText = result.text; 
 
-        if (!extractedText) {
-            throw new Error("No text returned from the backend");
+        // UPDATED: Catch empty strings returned by Tesseract
+        if (!extractedText || extractedText.trim() === "") {
+            throw new Error("Backend processed the image, but Tesseract found no readable text.");
         }
 
-        // 4. Save the raw text and process it through the local grid parser
         await AsyncStorage.setItem('@raw_ocr_text', extractedText); 
         
         const extractedClasses = parseOCRText(extractedText);
@@ -423,13 +398,13 @@ export default function TimetableScreen() {
         saveScheduleToPhone(extractedClasses);
         await scheduleClassNotifications(extractedClasses);
         
-        // 5. Trigger success interactions
         ReactNativeHapticFeedback.trigger('notificationSuccess', { enableVibrateFallback: true });
         setShouldAnimateJiggle(true);
-      } catch (error) {
+      } catch (error: any) {
         console.error("Backend OCR Error: ", error);
         ReactNativeHapticFeedback.trigger('notificationError', { enableVibrateFallback: true });
-        Alert.alert("Server Error", "Failed to process the timetable on the backend. Check your EC2 connection.");
+        // UPDATED: Shows exactly why the scan failed
+        Alert.alert("Scan Failed", `Reason: ${error.message}`);
       } finally {
         setIsScanning(false);
       }
@@ -442,7 +417,7 @@ export default function TimetableScreen() {
         <>
           <ActivityIndicator size="large" color={COLORS.THE_MINT} />
           <Text style={styles.emptyTitle}>Scanning Timetable...</Text>
-          <Text style={styles.emptySub}>Running local Optical Character Recognition</Text>
+          <Text style={styles.emptySub}>Running server-side Optical Character Recognition</Text>
         </>
       ) : (
         <>
@@ -458,7 +433,7 @@ export default function TimetableScreen() {
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.header}>My Schedule</Text>
-          <Text style={styles.subHeader}>G H Raisoni Skilltech University</Text>
+          <Text style={styles.subHeader}>G. H. Raisoni Skilltech University</Text>
         </View>
         
         {schedule.length === 0 ? (
@@ -504,97 +479,23 @@ const styles = StyleSheet.create({
   subHeader: { fontSize: 14, color: COLORS.THE_MINT, paddingHorizontal: 20, paddingBottom: 20, fontWeight: '700' },
   list: { paddingHorizontal: 20, paddingBottom: 40 },
   emptyList: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  
   emptyContainer: { alignItems: 'center', padding: 40 },
   emptyTitle: { fontSize: 22, fontWeight: '800', color: COLORS.BLACK, marginTop: 16 },
   emptySub: { fontSize: 15, color: '#666', textAlign: 'center', marginTop: 8, lineHeight: 22 },
-
-  // --- UPDATED CONTAINER LAYER ---
-  cardContainer: { 
-    marginBottom: 16, 
-    borderRadius: 28, // Matches the clay card perfectly so background colors don't bleed out
-  },
-  swipeText: {
-    color: COLORS.WHITE,
-    fontWeight: '900',
-    fontSize: 18,
-    letterSpacing: 1.5,
-  },
-  // -----------------------------
-
-  clayCard: {
-    padding: 22,
-    borderRadius: 28, 
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderBottomWidth: 5, 
-    borderRightWidth: 3,
-    shadowOffset: { width: 4, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  clayWhite: {
-    backgroundColor: COLORS.WHITE,
-    borderTopColor: 'rgba(255, 255, 255, 1)',
-    borderLeftColor: 'rgba(255, 255, 255, 1)',
-    borderBottomColor: 'rgba(0, 0, 0, 0.04)',
-    borderRightColor: 'rgba(0, 0, 0, 0.04)',
-    shadowColor: '#A39B8F', 
-  },
-  clayMint: {
-    backgroundColor: COLORS.THE_MINT,
-    borderTopColor: 'rgba(255, 255, 255, 0.4)',
-    borderLeftColor: 'rgba(255, 255, 255, 0.4)',
-    borderBottomColor: 'rgba(0, 0, 0, 0.15)',
-    borderRightColor: 'rgba(0, 0, 0, 0.15)',
-    shadowColor: COLORS.THE_MINT,
-  },
-  clayRed: {
-    backgroundColor: COLORS.ABSENT_RED,
-    borderTopColor: 'rgba(255, 255, 255, 0.4)',
-    borderLeftColor: 'rgba(255, 255, 255, 0.4)',
-    borderBottomColor: 'rgba(0, 0, 0, 0.15)',
-    borderRightColor: 'rgba(0, 0, 0, 0.15)',
-    shadowColor: COLORS.ABSENT_RED,
-  },
-
+  cardContainer: { marginBottom: 16, borderRadius: 28 },
+  swipeText: { color: COLORS.WHITE, fontWeight: '900', fontSize: 18, letterSpacing: 1.5 },
+  clayCard: { padding: 22, borderRadius: 28, flexDirection: 'row', alignItems: 'center', borderTopWidth: 3, borderLeftWidth: 3, borderBottomWidth: 5, borderRightWidth: 3, shadowOffset: { width: 4, height: 8 }, shadowOpacity: 0.15, shadowRadius: 10, elevation: 8 },
+  clayWhite: { backgroundColor: COLORS.WHITE, borderTopColor: 'rgba(255, 255, 255, 1)', borderLeftColor: 'rgba(255, 255, 255, 1)', borderBottomColor: 'rgba(0, 0, 0, 0.04)', borderRightColor: 'rgba(0, 0, 0, 0.04)', shadowColor: '#A39B8F' },
+  clayMint: { backgroundColor: COLORS.THE_MINT, borderTopColor: 'rgba(255, 255, 255, 0.4)', borderLeftColor: 'rgba(255, 255, 255, 0.4)', borderBottomColor: 'rgba(0, 0, 0, 0.15)', borderRightColor: 'rgba(0, 0, 0, 0.15)', shadowColor: COLORS.THE_MINT },
+  clayRed: { backgroundColor: COLORS.ABSENT_RED, borderTopColor: 'rgba(255, 255, 255, 0.4)', borderLeftColor: 'rgba(255, 255, 255, 0.4)', borderBottomColor: 'rgba(0, 0, 0, 0.15)', borderRightColor: 'rgba(0, 0, 0, 0.15)', shadowColor: COLORS.ABSENT_RED },
   time: { fontSize: 16, fontWeight: '900', color: COLORS.THE_MINT, width: 80 },
   details: { flex: 1, borderLeftWidth: 2, borderLeftColor: COLORS.ICE_LATTE, paddingLeft: 16 },
   subject: { fontSize: 17, fontWeight: '800', color: COLORS.BLACK },
   room: { fontSize: 14, color: '#666', marginTop: 4, fontWeight: '600' },
-  
-  undoButton: { 
-    paddingHorizontal: 16, 
-    paddingVertical: 10, 
-    borderRadius: 20, 
-    borderTopWidth: 2, 
-    borderLeftWidth: 2, 
-    borderBottomWidth: 4, 
-    borderRightWidth: 2,
-    shadowOpacity: 0.1,
-    elevation: 3,
-  },
+  undoButton: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 4, borderRightWidth: 2, shadowOpacity: 0.1, elevation: 3 },
   undoText: { color: COLORS.BLACK, fontWeight: '900' },
-  uploadBtn: { 
-    paddingVertical: 12, 
-    paddingHorizontal: 20, 
-    borderRadius: 20,
-    borderTopWidth: 2,
-    borderLeftWidth: 2,
-    borderBottomWidth: 4,
-    borderRightWidth: 2,
-    elevation: 5,
-  },
+  uploadBtn: { paddingVertical: 12, paddingHorizontal: 20, borderRadius: 20, borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 4, borderRightWidth: 2, elevation: 5 },
   uploadBtnText: { color: COLORS.WHITE, fontWeight: '900' },
-  changeBtn: { 
-    paddingVertical: 10, 
-    paddingHorizontal: 16, 
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: COLORS.THE_MINT,
-  },
+  changeBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20, borderWidth: 2, borderColor: COLORS.THE_MINT },
   changeBtnText: { color: COLORS.THE_MINT, fontWeight: '900', fontSize: 12 },
 });

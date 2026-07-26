@@ -111,7 +111,11 @@ async def process_timetable(file: UploadFile = File(...)):
         # 3. Pass the image to Tesseract to extract the raw text
         raw_text = pytesseract.image_to_string(image)
         
-        logger.info("OCR Log: Successfully extracted text from the image.")
+        # UPDATED: Log the exact length of the extracted text
+        logger.info(f"OCR Log: Successfully extracted {len(raw_text.strip())} characters from the image.")
+        
+        if not raw_text.strip():
+            logger.warning("OCR Log: Warning - Tesseract returned completely blank text!")
         
         # 4. Return the text exactly as the React Native app expects it
         return {"text": raw_text}
