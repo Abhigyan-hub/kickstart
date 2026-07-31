@@ -10,8 +10,7 @@ async def upload_timetable(request: Request, image: UploadFile = File(...)):
     client_ip = request.client.host
     logger.info(f"CASCADE Timetable API [IP: {client_ip}]: Processing OCR upload: {image.filename}")
     
-    if not image.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File provided is not an image.")
+    # Removed strict content-type check to prevent HTTP 400 on valid React Native uploads
 
     try:
         image_bytes = await image.read()
@@ -21,7 +20,7 @@ async def upload_timetable(request: Request, image: UploadFile = File(...)):
         
     except ValueError as ve:
         logger.error(f"Image Decoding Error: {str(ve)}")
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail="Failed to decode image. Ensure the file is a valid picture.")
     except Exception as e:
         logger.error(f"OCR Pipeline Error: {str(e)}")
         raise HTTPException(
