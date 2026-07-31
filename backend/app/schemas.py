@@ -78,7 +78,7 @@ class AttendanceResponse(AttendanceBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-    # ==========================================
+# ==========================================
 # 4. PASSWORD RESET (OTP) SCHEMAS
 # ==========================================
 
@@ -91,3 +91,22 @@ class OTPVerifyAndReset(BaseModel):
     reg_number: str
     otp: str
     new_password_hash: str
+
+# ==========================================
+# 5. TIMETABLE OCR SCHEMAS
+# ==========================================
+
+class Lecture(BaseModel):
+    subject: str
+    faculty: str
+    batch: Optional[str] = None
+
+class TimeSlotSchedule(BaseModel):
+    day: str
+    start: str
+    end: str
+    lectures: List[Lecture]
+    needsVerification: bool = False
+
+class TimetableResponse(BaseModel):
+    schedule: List[TimeSlotSchedule]
