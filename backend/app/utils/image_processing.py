@@ -59,7 +59,19 @@ def preprocess_and_extract_grid(image_bytes: bytes) -> List[List[np.ndarray]]:
     for row in rows:
         cell_images = []
         for (x, y, w, h) in row:
-            cell_crop = gray[y+2:y+h-2, x+2:x+w-2]
+            # SAFE CROP: Only apply padding if the box is large enough
+            y1 = y + 2 if h > 4 else y
+            y2 = y + h - 2 if h > 4 else y + h
+            x1 = x + 2 if w > 4 else x
+            x2 = x + w - 2 if w > 4 else x + w
+            
+            cell_crop = gray[y1:y2, x1:x2]
+            
+            # FALLBACK: If the array is still 0-sized, substitute a 10x10 blank white image
+            # This prevents Pytesseract from crashing while maintaining the column index
+            if cell_crop.size == 0:
+                cell_crop = np.ones((10, 10), dtype=np.uint8) * 255
+                
             cell_images.append(cell_crop)
         grid_images.append(cell_images)
         
