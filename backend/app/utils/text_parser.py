@@ -24,25 +24,28 @@ def normalize_ocr_text(text: str) -> str:
     return text
 
 def parse_time_slot(text: str) -> Tuple[Optional[str], Optional[str]]:
-    """Converts time ranges tolerating 'to', hyphens, and extreme whitespace."""
-    # Added (?:-|to|~|_) to handle "2.00pm to 2.20pm" formats
+    """Converts time ranges and provides a raw string fallback for OCR typos."""
     time_pattern = r"(\d{1,2})\s*[\.\:]\s*(\d{2})\s*(am|pm)?\s*(?:-|to|~|_)\s*(\d{1,2})\s*[\.\:]\s*(\d{2})\s*(am|pm)?"
     match = re.search(time_pattern, text.lower())
     
-    if not match:
-        return None, None
+    if match:
+        h1, m1, p1, h2, m2, p2 = match.groups()
         
-    h1, m1, p1, h2, m2, p2 = match.groups()
-    
-    def to_24h(h: str, m: str, p: str) -> str:
-        hour = int(h)
-        if p == 'pm' and hour != 12: hour += 12
-        if p == 'am' and hour == 12: hour = 0
-        return f"{hour:02d}:{m}"
+        def to_24h(h: str, m: str, p: str) -> str:
+            hour = int(h)
+            if p == 'pm' and hour != 12: hour += 12
+            if p == 'am' and hour == 12: hour = 0
+            return f"{hour:02d}:{m}"
+            
+        p1 = p1 or ('pm' if (p2 == 'pm' and int(h1) < 12 and int(h1) >= 8) else 'am')
+        return to_24h(h1, m1, p1), to_24h(h2, m2, p2)
         
-    p1 = p1 or ('pm' if (p2 == 'pm' and int(h1) < 12 and int(h1) >= 8) else 'am')
-    
-    return to_24h(h1, m1, p1), to_24h(h2, m2, p2)
+    # FALLBACK: If regex fails but it looks like a time header (has at least 3 numbers), return the raw string
+    clean = text.replace('\n', ' ').strip()
+    if sum(c.isdigit() for c in clean) >= 3:
+        return clean, ""
+        
+    return None, None
 
 def extract_lectures(cell_text: str) -> List[Lecture]:
     """Parses a cleaned cell string into one or more Lecture objects, ignoring inner whitespaces."""

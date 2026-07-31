@@ -1,9 +1,9 @@
 import cv2
 import numpy as np
-from typing import List
+from typing import List, Dict, Any
 
-def preprocess_and_extract_grid(image_bytes: bytes) -> List[List[np.ndarray]]:
-    """Extracts the tabular grid using morphological operations."""
+def preprocess_and_extract_grid(image_bytes: bytes) -> List[List[Dict[str, Any]]]:
+    """Extracts the tabular grid and maps physical X coordinates for handling merged cells."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
@@ -13,10 +13,9 @@ def preprocess_and_extract_grid(image_bytes: bytes) -> List[List[np.ndarray]]:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
     # Denoise and threshold
-    gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
     
-    kernel_len = np.array(img).shape[1] // 100
+    kernel_len = max(10, gray.shape[1] // 100)
     ver_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_len))
     hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_len, 1))
     
@@ -38,7 +37,7 @@ def preprocess_and_extract_grid(image_bytes: bytes) -> List[List[np.ndarray]]:
     if not valid_boxes:
         return []
 
-    valid_boxes.sort(key=lambda b: b[1])
+    valid_boxes.sort(key=lambda b: b[1]) # Sort top-to-bottom
     
     rows = []
     current_row = [valid_boxes[0]]
@@ -47,7 +46,7 @@ def preprocess_and_extract_grid(image_bytes: bytes) -> List[List[np.ndarray]]:
         if abs(box[1] - current_row[-1][1]) < 15:
             current_row.append(box)
         else:
-            current_row.sort(key=lambda b: b[0])
+            current_row.sort(key=lambda b: b[0]) # Sort left-to-right
             rows.append(current_row)
             current_row = [box]
             
@@ -55,24 +54,23 @@ def preprocess_and_extract_grid(image_bytes: bytes) -> List[List[np.ndarray]]:
         current_row.sort(key=lambda b: b[0])
         rows.append(current_row)
         
-    grid_images = []
+    grid_data = []
     for row in rows:
-        cell_images = []
+        cell_data = []
         for (x, y, w, h) in row:
-            # SAFE CROP: Only apply padding if the box is large enough
-            y1 = y + 2 if h > 4 else y
-            y2 = y + h - 2 if h > 4 else y + h
-            x1 = x + 2 if w > 4 else x
-            x2 = x + w - 2 if w > 4 else x + w
+            y1, y2 = (y + 2 if h > 4 else y), (y + h - 2 if h > 4 else y + h)
+            x1, x2 = (x + 2 if w > 4 else x), (x + w - 2 if w > 4 else x + w)
             
             cell_crop = gray[y1:y2, x1:x2]
-            
-            # FALLBACK: If the array is still 0-sized, substitute a 10x10 blank white image
-            # This prevents Pytesseract from crashing while maintaining the column index
             if cell_crop.size == 0:
                 cell_crop = np.ones((10, 10), dtype=np.uint8) * 255
                 
-            cell_images.append(cell_crop)
-        grid_images.append(cell_images)
+            cell_data.append({
+                "img": cell_crop,
+                "x_start": x,
+                "x_end": x + w,
+                "center_x": x + (w // 2)
+            })
+        grid_data.append(cell_data)
         
-    return grid_images
+    return grid_data
