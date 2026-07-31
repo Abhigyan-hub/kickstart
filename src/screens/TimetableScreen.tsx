@@ -347,7 +347,7 @@ export default function TimetableScreen() {
   const handleUploadImage = () => {
     launchImageLibrary({ 
       mediaType: 'photo',
-      maxWidth: 1600, // COMPRESSING TO PREVENT TIMEOUTS
+      maxWidth: 1600,
       maxHeight: 1600,
       quality: 0.8
     }, async (response) => {
@@ -362,20 +362,21 @@ export default function TimetableScreen() {
       
       try {
         const formData = new FormData();
-        formData.append('file', {
+        formData.append('image', { // Match the backend 'image' parameter name
           uri: imageUri,
           type: response.assets[0].type || 'image/jpeg',
           name: response.assets[0].fileName || 'timetable.jpg',
         } as any);
 
-        const awsEndpoint = 'http://16.170.193.134:8000/upload-timetable/'; 
+        // Updated to the new modular backend endpoint
+        const awsEndpoint = 'http://16.170.193.134:8000/api/timetable/upload'; 
         
         const apiResponse = await fetch(awsEndpoint, {
           method: 'POST',
           body: formData,
           headers: {
-            'Content-Type': 'multipart/form-data',
-          },
+            // Include your admin API key if required by a security dependency, or leave blank if unprotected
+          }
         });
 
         if (!apiResponse.ok) {
@@ -383,16 +384,28 @@ export default function TimetableScreen() {
         }
 
         const result = await apiResponse.json();
-        const extractedText = result.text; 
-
-        // UPDATED: Catch empty strings returned by Tesseract
-        if (!extractedText || extractedText.trim() === "") {
-            throw new Error("Backend processed the image, but Tesseract found no readable text.");
+        
+        // Ensure the backend returned a valid schedule array
+        if (!result.schedule || result.schedule.length === 0) {
+            throw new Error("Backend processed the image, but found no readable classes.");
         }
 
-        await AsyncStorage.setItem('@raw_ocr_text', extractedText); 
+        // Map the backend JSON to the frontend state format
+        let idCounter = 1;
+        const extractedClasses: ScheduleItem[] = [];
         
-        const extractedClasses = parseOCRText(extractedText);
+        result.schedule.forEach((slot: any) => {
+            slot.lectures.forEach((lecture: any) => {
+                const batchText = lecture.batch ? ` (${lecture.batch})` : '';
+                extractedClasses.push({
+                    id: String(idCounter++),
+                    time: `${slot.start} - ${slot.end}`,
+                    subject: `${lecture.subject}${batchText}`,
+                    room: 'SLIDE TO MARK ATTENDANCE',
+                    status: 'pending'
+                });
+            });
+        });
         
         setSchedule(extractedClasses);
         saveScheduleToPhone(extractedClasses);
@@ -403,7 +416,6 @@ export default function TimetableScreen() {
       } catch (error: any) {
         console.error("Backend OCR Error: ", error);
         ReactNativeHapticFeedback.trigger('notificationError', { enableVibrateFallback: true });
-        // UPDATED: Shows exactly why the scan failed
         Alert.alert("Scan Failed", `Reason: ${error.message}`);
       } finally {
         setIsScanning(false);
