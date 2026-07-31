@@ -362,21 +362,17 @@ export default function TimetableScreen() {
       
       try {
         const formData = new FormData();
-        formData.append('image', { // Match the backend 'image' parameter name
+        formData.append('image', { 
           uri: imageUri,
           type: response.assets[0].type || 'image/jpeg',
           name: response.assets[0].fileName || 'timetable.jpg',
         } as any);
 
-        // Updated to the new modular backend endpoint
         const awsEndpoint = 'http://16.170.193.134:8000/api/timetable/upload'; 
         
         const apiResponse = await fetch(awsEndpoint, {
           method: 'POST',
           body: formData,
-          headers: {
-            // Include your admin API key if required by a security dependency, or leave blank if unprotected
-          }
         });
 
         if (!apiResponse.ok) {
@@ -385,28 +381,41 @@ export default function TimetableScreen() {
 
         const result = await apiResponse.json();
         
-        // Ensure the backend returned a valid schedule array
+        // DEBUG: Print exactly what the server extracted to your Metro bundler console
+        console.log("BACKEND JSON PAYLOAD:", JSON.stringify(result, null, 2));
+
         if (!result.schedule || result.schedule.length === 0) {
-            throw new Error("Backend processed the image, but found no readable classes.");
+            throw new Error("Backend could not find a distinct table grid or valid time headers.");
         }
 
-        // Map the backend JSON to the frontend state format
+        // Get current day to filter the massive weekly array
+        const dayNames = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+        let currentDay = dayNames[new Date().getDay()];
+        if (currentDay === "SUN") currentDay = "MON"; 
+
         let idCounter = 1;
         const extractedClasses: ScheduleItem[] = [];
         
         result.schedule.forEach((slot: any) => {
-            slot.lectures.forEach((lecture: any) => {
-                const batchText = lecture.batch ? ` (${lecture.batch})` : '';
-                extractedClasses.push({
-                    id: String(idCounter++),
-                    time: `${slot.start} - ${slot.end}`,
-                    subject: `${lecture.subject}${batchText}`,
-                    room: 'SLIDE TO MARK ATTENDANCE',
-                    status: 'pending'
+            // ONLY render cards if the extracted day matches today
+            if (slot.day === currentDay) {
+                slot.lectures.forEach((lecture: any) => {
+                    const batchText = lecture.batch ? ` (${lecture.batch})` : '';
+                    extractedClasses.push({
+                        id: String(idCounter++),
+                        time: `${slot.start} - ${slot.end}`,
+                        subject: `${lecture.subject}${batchText}`,
+                        room: 'SLIDE TO MARK ATTENDANCE',
+                        status: 'pending'
+                    });
                 });
-            });
+            }
         });
         
+        if (extractedClasses.length === 0) {
+            throw new Error(`Classes were extracted, but nothing is scheduled for today (${currentDay}).`);
+        }
+
         setSchedule(extractedClasses);
         saveScheduleToPhone(extractedClasses);
         await scheduleClassNotifications(extractedClasses);

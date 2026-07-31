@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple
 from app.schemas import Lecture
 
 def normalize_ocr_text(text: str) -> str:
-    """Fixes common Tesseract OCR errors, normalizes spacing, and ignores whitespace in room numbers."""
+    """Fixes common Tesseract OCR errors, normalizes spacing, and removes room numbers."""
     if not text:
         return ""
     
@@ -16,17 +16,17 @@ def normalize_ocr_text(text: str) -> str:
     for pattern, replacement in replacements.items():
         text = re.sub(pattern, replacement, text)
         
-    # Ignore classroom numbers even with spaces (e.g., C315, C 315, A 017)
-    text = re.sub(r"\b[A-C]\s*\d{3}\b|\bA\s*017\b", "", text)
+    # Matches standard and complex room numbers: C315, C-315, C-(108), A 017, A303
+    text = re.sub(r"\b[A-C]\s*-?\s*\(?\s*\d{3}\s*\)?\b", "", text)
     
     # Normalize multiple spaces and newlines
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 def parse_time_slot(text: str) -> Tuple[Optional[str], Optional[str]]:
-    """Converts time ranges while tolerating extreme whitespace (e.g. '12 . 10 pm - 1 : 05 pm')."""
-    # Added \s* everywhere to tolerate spaces between numbers, colons, and am/pm
-    time_pattern = r"(\d{1,2})\s*[\.\:]\s*(\d{2})\s*(am|pm)?\s*-\s*(\d{1,2})\s*[\.\:]\s*(\d{2})\s*(am|pm)?"
+    """Converts time ranges tolerating 'to', hyphens, and extreme whitespace."""
+    # Added (?:-|to|~|_) to handle "2.00pm to 2.20pm" formats
+    time_pattern = r"(\d{1,2})\s*[\.\:]\s*(\d{2})\s*(am|pm)?\s*(?:-|to|~|_)\s*(\d{1,2})\s*[\.\:]\s*(\d{2})\s*(am|pm)?"
     match = re.search(time_pattern, text.lower())
     
     if not match:
@@ -57,16 +57,16 @@ def extract_lectures(cell_text: str) -> List[Lecture]:
         batch = None
         faculty = ""
         
-        # Extract Batch (e.g., A1, A 1, ( A 1 )) - Ignores whitespace
-        batch_match = re.search(r"\(\s*([A-Z]\s*\d+)\s*\)", raw)
+        # Extract Batch allowing combinations (e.g., A1, A 1, (A1,A2,A3))
+        batch_match = re.search(r"\(\s*([A-D]\s*\d(?:(?:\s*,\s*)[A-D]\s*\d)*)\s*\)", raw)
         if batch_match:
-            batch = batch_match.group(1).replace(" ", "") # Removes inner spaces to return 'A1'
+            batch = batch_match.group(1).replace(" ", "") 
             raw = raw.replace(batch_match.group(0), "")
             
-        # Extract Faculty Initials (e.g., AM, A M, ( A M )) - Ignores whitespace
-        faculty_match = re.search(r"\(\s*([A-Z](?:\s*[A-Z]){1,2})\s*\)", raw)
+        # Extract Faculty Initials allowing numbers (e.g., AM, A M, NF4)
+        faculty_match = re.search(r"\(\s*([A-Z]{2,3}\d?)\s*\)", raw)
         if faculty_match:
-            faculty = faculty_match.group(1).replace(" ", "") # Removes inner spaces to return 'AM'
+            faculty = faculty_match.group(1).replace(" ", "") 
             raw = raw.replace(faculty_match.group(0), "")
             
         subject = raw.replace("()", "").strip()
